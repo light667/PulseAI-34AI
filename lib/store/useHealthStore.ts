@@ -30,7 +30,7 @@ export const useHealthStore = create<HealthState>()(
       lastDiagnosis: null,
       recentDiagnoses: [],
       language: "en",
-      theme: "dark",
+      theme: "light",
       setProfile: (profile) => set({ profile }),
       setLastDiagnosis: (lastDiagnosis) => set({ lastDiagnosis }),
       setRecentDiagnoses: (recentDiagnoses) => set({ recentDiagnoses }),
