@@ -1,0 +1,180 @@
+@import "../styles/tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: var(--pulse-fg);
+  background: var(--pulse-bg-primary);
+  font-family: var(--font-dm-sans), "DM Sans", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-syne), "Syne", sans-serif;
+}
+
+/* ECG background — works in dark mode */
+.dark .ecg-bg,
+.ecg-bg {
+  background-color: var(--pulse-bg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='60' viewBox='0 0 200 60'%3E%3Cpath d='M0 30 H30 L40 10 L55 50 L70 30 H200' fill='none' stroke='%2300FF87' stroke-width='1.5' opacity='0.07'/%3E%3C/svg%3E");
+  background-size: 200px 60px;
+  background-repeat: repeat-x;
+  background-position: bottom;
+}
+
+/* Light mode ECG uses darker green */
+.light .ecg-bg {
+  background-color: var(--pulse-bg-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='60' viewBox='0 0 200 60'%3E%3Cpath d='M0 30 H30 L40 10 L55 50 L70 30 H200' fill='none' stroke='%23008744' stroke-width='1.5' opacity='0.1'/%3E%3C/svg%3E");
+}
+
+.glass-panel {
+  background: var(--pulse-bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--pulse-border-glass);
+  border-radius: 24px;
+}
+
+.light .glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+
+.app-container {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  position: relative;
+  box-shadow: 0 0 60px rgba(0, 255, 135, 0.04);
+}
+
+.pulse-card {
+  border-radius: 1rem;
+  border: 1px solid var(--pulse-border);
+  background: var(--pulse-bg-secondary);
+  backdrop-filter: blur(4px);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.pulse-card:hover {
+  border-color: var(--pulse-border-active);
+}
+
+.btn-primary {
+  width: 100%;
+  border-radius: 9999px;
+  background: var(--pulse-accent-green);
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  color: var(--pulse-fg-inverse);
+  transition: all 0.2s;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.btn-primary:active {
+  transform: scale(0.95);
+}
+
+.btn-secondary {
+  border-radius: 9999px;
+  border: 1px solid var(--pulse-border-active);
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  color: var(--pulse-accent-green);
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background: var(--pulse-accent-green-subtle);
+}
+
+.input-field {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--pulse-border);
+  background: var(--pulse-bg-tertiary);
+  padding: 0.75rem 1rem;
+  color: var(--pulse-fg);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-field::placeholder {
+  color: var(--pulse-fg-dim);
+}
+
+.input-field:focus {
+  border-color: var(--pulse-accent-green);
+  box-shadow: 0 0 0 1px var(--pulse-accent-green);
+}
+
+/* Light-mode select & option backgrounds */
+.light .input-field,
+.light select {
+  background: #f4f4f5;
+  color: #09090b;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.light select option {
+  background: #ffffff;
+  color: #09090b;
+}
+
+.maplibregl-popup-content {
+  background: var(--pulse-bg-secondary) !important;
+  color: var(--pulse-fg) !important;
+  border-radius: 12px !important;
+}
+
+.maplibregl-ctrl-attrib {
+  display: none !important;
+}
+
+/* Responsive sidebar offset */
+@media (min-width: 768px) {
+  .md\:pl-64 {
+    padding-left: 16rem;
+  }
+}
+
+/* Health record card glow */
+.health-score-card {
+  background: linear-gradient(135deg, var(--pulse-accent-green-subtle) 0%, var(--pulse-accent-blue-subtle, rgba(79, 195, 247, 0.05)) 100%);
+  border: 1px solid var(--pulse-border-active);
+}
+
+.light .health-score-card {
+  background: linear-gradient(135deg, rgba(0, 135, 68, 0.08) 0%, rgba(2, 132, 199, 0.05) 100%);
+  border: 1px solid rgba(0, 135, 68, 0.25);
+}
+
+/* Severity badges */
+.severity-low { color: var(--pulse-severity-low); }
+.severity-medium { color: var(--pulse-severity-medium); }
+.severity-high { color: var(--pulse-severity-high); }
+.severity-critical { color: var(--pulse-severity-critical); }

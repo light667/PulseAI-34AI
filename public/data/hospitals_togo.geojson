@@ -1,0 +1,82 @@
+{
+  "type": "FeatureCollection",
+  "country": "togo",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [1.2255, 6.1375] },
+      "properties": {
+        "id": "tg_001",
+        "name": "CHU Sylvanus Olympio",
+        "city": "Lomé",
+        "country": "Togo",
+        "type": "public",
+        "phone": "+228 22 21 25 01",
+        "services": ["urgences", "chirurgie", "pediatrie", "maternite"],
+        "opening_hours": "24/7",
+        "emergency": true,
+        "osm_id": 1001
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [1.1918, 6.2255] },
+      "properties": {
+        "id": "tg_002",
+        "name": "Clinique Biasa",
+        "city": "Lomé",
+        "country": "Togo",
+        "type": "private",
+        "phone": "+228 22 46 00 00",
+        "services": ["general", "maternite", "pediatrie"],
+        "opening_hours": "08:00-20:00",
+        "emergency": false,
+        "osm_id": 1002
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [1.1332, 6.1319] },
+      "properties": {
+        "id": "tg_003",
+        "name": "Hôpital Saint Joseph de Lomé",
+        "city": "Lomé",
+        "country": "Togo",
+        "type": "private",
+        "services": ["urgences", "chirurgie", "radiologie"],
+        "opening_hours": "24/7",
+        "emergency": true,
+        "osm_id": 1003
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [1.1064, 6.1785] },
+      "properties": {
+        "id": "tg_004",
+        "name": "Centre Hospitalier Régional des Plateaux",
+        "city": "Atakpamé",
+        "country": "Togo",
+        "type": "public",
+        "services": ["urgences", "pediatrie", "maternite"],
+        "opening_hours": "24/7",
+        "emergency": true,
+        "osm_id": 1004
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [0.9833, 8.1] },
+      "properties": {
+        "id": "tg_005",
+        "name": "Hôpital régional de Kara",
+        "city": "Kara",
+        "country": "Togo",
+        "type": "public",
+        "services": ["urgences", "general"],
+        "emergency": true,
+        "osm_id": 1005
+      }
+    }
+  ]
+}

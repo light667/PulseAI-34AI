@@ -1,0 +1,86 @@
+:root,
+.dark {
+  --pulse-bg-primary: #050f1c;
+  --pulse-bg-secondary: #0a1a2e;
+  --pulse-bg-tertiary: #0f2444;
+  --pulse-bg-glass: rgba(10, 26, 46, 0.7);
+  --pulse-accent-green: #00ff87;
+  --pulse-accent-green-dim: #00cc6a;
+  --pulse-accent-green-glow: rgba(0, 255, 135, 0.15);
+  --pulse-accent-green-subtle: rgba(0, 255, 135, 0.08);
+  --pulse-accent-orange: #ff6b35;
+  --pulse-accent-orange-dim: #e55a26;
+  --pulse-accent-orange-glow: rgba(255, 107, 53, 0.15);
+  --pulse-accent-blue: #4fc3f7;
+  --pulse-accent-blue-dim: #29b6f6;
+  --pulse-fg: #f0f4ff;
+  --pulse-fg-muted: #8ba4c4;
+  --pulse-fg-dim: #4a6080;
+  --pulse-fg-inverse: #050f1c;
+  --pulse-severity-low: #00ff87;
+  --pulse-severity-medium: #ffd166;
+  --pulse-severity-high: #ff6b35;
+  --pulse-severity-critical: #ff3b5c;
+  --pulse-border: rgba(75, 120, 180, 0.15);
+  --pulse-border-active: rgba(0, 255, 135, 0.3);
+  --pulse-border-glass: rgba(255, 255, 255, 0.06);
+  --pulse-lyra-violet: #a78bfa;
+  --pulse-lyra-teal: #5eead4;
+}
+
+.light {
+  --pulse-bg-primary: #ffffff;
+  --pulse-bg-secondary: #f4f4f5;
+  --pulse-bg-tertiary: #e4e4e7;
+  --pulse-bg-glass: rgba(244, 244, 245, 0.8);
+  --pulse-accent-green: #008744; /* Darker green for accessibility on light background */
+  --pulse-accent-green-dim: #006b35;
+  --pulse-accent-green-glow: rgba(0, 135, 68, 0.15);
+  --pulse-accent-green-subtle: rgba(0, 135, 68, 0.08);
+  --pulse-accent-orange: #d9480f;
+  --pulse-accent-orange-dim: #bc3e0c;
+  --pulse-accent-orange-glow: rgba(217, 72, 15, 0.15);
+  --pulse-accent-blue: #0284c7;
+  --pulse-accent-blue-dim: #0369a1;
+  --pulse-fg: #09090b;
+  --pulse-fg-muted: #4b5563;
+  --pulse-fg-dim: #9ca3af;
+  --pulse-fg-inverse: #ffffff;
+  --pulse-severity-low: #008744;
+  --pulse-severity-medium: #d97706;
+  --pulse-severity-high: #d9480f;
+  --pulse-severity-critical: #dc2626;
+  --pulse-border: rgba(0, 0, 0, 0.08);
+  --pulse-border-active: rgba(0, 135, 68, 0.3);
+  --pulse-border-glass: rgba(0, 0, 0, 0.04);
+  --pulse-lyra-violet: #7c3aed;
+  --pulse-lyra-teal: #0d9488;
+}
+
+:root {
+  /* Legacy aliases (components) */
+  --bg-primary: var(--pulse-bg-primary);
+  --bg-secondary: var(--pulse-bg-secondary);
+  --bg-tertiary: var(--pulse-bg-tertiary);
+  --bg-glass: var(--pulse-bg-glass);
+  --accent-green: var(--pulse-accent-green);
+  --accent-green-dim: var(--pulse-accent-green-dim);
+  --accent-green-glow: var(--pulse-accent-green-glow);
+  --accent-green-subtle: var(--pulse-accent-green-subtle);
+  --accent-orange: var(--pulse-accent-orange);
+  --accent-blue: var(--pulse-accent-blue);
+  --accent-blue-dim: var(--pulse-accent-blue-dim);
+  --text-primary: var(--pulse-fg);
+  --text-secondary: var(--pulse-fg-muted);
+  --text-muted: var(--pulse-fg-dim);
+  --text-inverse: var(--pulse-fg-inverse);
+  --severity-low: var(--pulse-severity-low);
+  --severity-medium: var(--pulse-severity-medium);
+  --severity-high: var(--pulse-severity-high);
+  --severity-critical: var(--pulse-severity-critical);
+  --border-default: var(--pulse-border);
+  --border-active: var(--pulse-border-active);
+  --border-glass: var(--pulse-border-glass);
+  --lyra-violet: var(--pulse-lyra-violet);
+  --lyra-teal: var(--pulse-lyra-teal);
+}
