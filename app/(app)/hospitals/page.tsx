@@ -517,7 +517,7 @@ export default function HospitalsPage() {
                 No hospitals matching this service were found nearby.
               </h3>
               <p className="text-sm text-[var(--text-muted)] max-w-sm mt-1">
-                Try expanding your search query, selecting "All Countries", or clearing active service filter chips.
+                Try expanding your search query, selecting &quot;All Countries&quot;, or clearing active service filter chips.
               </p>
               <div className="mt-6 flex flex-wrap justify-center gap-2">
                 <Button
