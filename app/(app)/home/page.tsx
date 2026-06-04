@@ -10,7 +10,6 @@ import {
   Search,
   Hospital,
   Leaf,
-  Pill,
   ChevronRight,
   Heart,
   Droplets,
@@ -25,13 +24,20 @@ import { useHealthStore } from "@/lib/store/useHealthStore";
 import { calculateBMI, formatDate, getGreeting } from "@/lib/utils";
 import { useAuth } from "@/components/AuthProvider";
 import { t } from "@/lib/i18n";
+import {
+  getLocalProfile,
+  getLocalRecentActivity,
+  mergeProfile,
+  saveLocalProfile,
+  setLocalRecentActivity,
+} from "@/lib/storage/userLocalStorage";
 
 const quickActions = [
   {
     href: "/diagnostic",
     icon: Search,
     labelKey: "nav.diagnostic" as const,
-    description: "AI symptom check",
+    descriptionKey: "home.action.diagnosticDesc" as const,
     color: "text-[var(--accent-green)]",
     bg: "bg-[var(--accent-green-subtle)]",
     border: "border-[var(--border-active)]",
@@ -40,7 +46,7 @@ const quickActions = [
     href: "/hospitals",
     icon: Hospital,
     labelKey: "nav.hospitals" as const,
-    description: "Find nearby care",
+    descriptionKey: "home.action.hospitalsDesc" as const,
     color: "text-[var(--accent-blue)]",
     bg: "bg-[rgba(79,195,247,0.08)]",
     border: "border-[rgba(79,195,247,0.2)]",
@@ -49,27 +55,33 @@ const quickActions = [
     href: "/lyra",
     icon: Leaf,
     labelKey: "nav.lyra" as const,
-    description: "Mental wellness",
+    descriptionKey: "home.action.lyraDesc" as const,
     color: "text-[var(--lyra-violet)]",
     bg: "bg-[rgba(167,139,250,0.08)]",
     border: "border-[rgba(167,139,250,0.2)]",
   },
-  {
-    href: "/scan",
-    icon: Pill,
-    labelKey: "nav.scan" as const,
-    description: "Verify medication",
-    color: "text-[var(--accent-orange)]",
-    bg: "bg-[var(--accent-orange-glow)]",
-    border: "border-[rgba(255,107,53,0.2)]",
-  },
 ];
 
-function getBMICategory(bmi: number) {
-  if (bmi < 18.5) return { label: "Underweight", color: "text-[var(--accent-blue)]" };
-  if (bmi < 25) return { label: "Healthy", color: "text-[var(--severity-low)]" };
-  if (bmi < 30) return { label: "Overweight", color: "text-[var(--severity-medium)]" };
-  return { label: "Obese", color: "text-[var(--severity-high)]" };
+function getBMICategory(bmi: number, language: "fr" | "en") {
+  if (bmi < 18.5)
+    return {
+      label: language === "fr" ? "Insuffisance" : "Underweight",
+      color: "text-[var(--accent-blue)]",
+    };
+  if (bmi < 25)
+    return {
+      label: language === "fr" ? "Normal" : "Healthy",
+      color: "text-[var(--severity-low)]",
+    };
+  if (bmi < 30)
+    return {
+      label: language === "fr" ? "Surpoids" : "Overweight",
+      color: "text-[var(--severity-medium)]",
+    };
+  return {
+    label: language === "fr" ? "Obésité" : "Obese",
+    color: "text-[var(--severity-high)]",
+  };
 }
 
 export default function HomePage() {
@@ -84,33 +96,83 @@ export default function HomePage() {
 
   useEffect(() => {
     const load = async () => {
-      if (!user || !supabaseToken) return;
-      const supabase = createClient(supabaseToken);
+      if (!user) return;
 
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.uid)
-        .single();
+      const localProfile = getLocalProfile(user.uid);
+      let merged = localProfile;
 
-      if (prof) {
-        setProfile(prof);
-        setName(prof.full_name?.split(" ")[0] || "there");
+      if (supabaseToken) {
+        const supabase = createClient(supabaseToken);
+        const { data: prof } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.uid)
+          .single();
+
+        merged = mergeProfile(localProfile, prof) ?? localProfile ?? prof;
+        if (merged) {
+          saveLocalProfile(user.uid, merged);
+        }
+
+        const { data: diagnoses } = await supabase
+          .from("diagnoses")
+          .select("id, top_condition, severity, created_at")
+          .eq("user_id", user.uid)
+          .order("created_at", { ascending: false })
+          .limit(3);
+
+        const localActivity = getLocalRecentActivity(user.uid);
+        if (localActivity.length > 0) {
+          setRecent(
+            localActivity.slice(0, 3).map((a) => ({
+              id: a.id,
+              top_condition: a.title,
+              severity: a.severity ?? "LOW",
+              created_at: a.created_at,
+            }))
+          );
+        } else if (diagnoses?.length) {
+          const fromDb = diagnoses.map((d) => ({
+            id: d.id,
+            top_condition: d.top_condition,
+            severity: d.severity,
+            created_at: d.created_at,
+          }));
+          setRecent(fromDb);
+          setLocalRecentActivity(
+            user.uid,
+            fromDb.map((d) => ({
+              id: d.id,
+              type: "diagnosis" as const,
+              title: d.top_condition,
+              severity: d.severity,
+              created_at: d.created_at,
+            }))
+          );
+        }
+      } else {
+        const localActivity = getLocalRecentActivity(user.uid);
+        if (localActivity.length > 0) {
+          setRecent(
+            localActivity.slice(0, 3).map((a) => ({
+              id: a.id,
+              top_condition: a.title,
+              severity: a.severity ?? "LOW",
+              created_at: a.created_at,
+            }))
+          );
+        }
+      }
+
+      if (merged) {
+        setProfile(merged);
+        setName(merged.full_name?.split(" ")[0] || "there");
         setProfileComplete(
-          !!(prof.weight_kg && prof.height_cm && prof.blood_group)
+          !!(merged.weight_kg && merged.height_cm && merged.blood_group)
         );
       } else {
         setName(user.email?.split("@")[0] || "there");
       }
-
-      const { data: diagnoses } = await supabase
-        .from("diagnoses")
-        .select("id, top_condition, severity, created_at")
-        .eq("user_id", user.uid)
-        .order("created_at", { ascending: false })
-        .limit(3);
-
-      if (diagnoses) setRecent(diagnoses);
     };
     load();
   }, [user, supabaseToken, setProfile, setRecent]);
@@ -120,14 +182,16 @@ export default function HomePage() {
       ? calculateBMI(profile.weight_kg, profile.height_cm)
       : null;
 
-  const bmiCategory = bmi ? getBMICategory(bmi) : null;
+  const bmiCategory = bmi ? getBMICategory(bmi, language) : null;
 
   const greeting = getGreeting(language);
   const dateStr = formatDate(new Date(), language === "en" ? "en-US" : "fr-FR");
 
+  const hasHealthStats =
+    profile?.blood_group || profile?.weight_kg || profile?.height_cm;
+
   return (
     <div className="min-h-full">
-      {/* ── Page Header ── */}
       <header className="mb-6 flex items-start justify-between">
         <div>
           <motion.h1
@@ -155,24 +219,23 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* ── Health Score / Mini EHR Card ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
         className="mb-6 overflow-hidden rounded-2xl border border-[var(--border-active)] bg-gradient-to-br from-[var(--accent-green-subtle)] to-[rgba(79,195,247,0.05)] p-5"
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Activity size={16} className="text-[var(--accent-green)]" />
             <span className="text-sm font-semibold text-[var(--text-secondary)]">
-              Health Overview
+              {t("home.healthOverview", language)}
             </span>
           </div>
           {profileComplete ? (
             <span className="flex items-center gap-1 text-xs text-[var(--severity-low)]">
               <CheckCircle2 size={13} />
-              Complete
+              {t("home.complete", language)}
             </span>
           ) : (
             <Link
@@ -180,99 +243,75 @@ export default function HomePage() {
               className="flex items-center gap-1 text-xs text-[var(--accent-green)] hover:underline"
             >
               <AlertCircle size={13} />
-              Complete profile
+              {t("home.completeProfile", language)}
             </Link>
           )}
         </div>
 
-        {/* Health Score Bar */}
-        <div className="mb-4">
-          <div className="flex items-end gap-2 mb-2">
-            <span className="font-display text-4xl font-bold text-[var(--accent-green)]">
-              87
-            </span>
-            <span className="mb-1 text-sm text-[var(--text-secondary)]">
-              /100 · Good
-            </span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--bg-tertiary)]">
-            <motion.div
-              className="h-full rounded-full bg-gradient-to-r from-[var(--accent-green)] to-[var(--accent-green-dim)]"
-              initial={{ width: 0 }}
-              animate={{ width: "87%" }}
-              transition={{ duration: 1.2, ease: "easeOut", delay: 0.3 }}
-            />
-          </div>
-        </div>
-
-        {/* Mini Health Record Stats */}
-        {profile ? (
+        {hasHealthStats ? (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {profile.blood_group && (
-              <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
-                <Droplets size={14} className="text-[var(--severity-critical)] flex-shrink-0" />
-                <div>
-                  <p className="text-[10px] text-[var(--text-muted)]">Blood</p>
-                  <p className="text-sm font-bold text-[var(--text-primary)]">
-                    {profile.blood_group}
-                  </p>
-                </div>
-              </div>
-            )}
-            {profile.weight_kg && (
-              <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
-                <Weight size={14} className="text-[var(--accent-blue)] flex-shrink-0" />
-                <div>
-                  <p className="text-[10px] text-[var(--text-muted)]">Weight</p>
-                  <p className="text-sm font-bold text-[var(--text-primary)]">
-                    {profile.weight_kg} kg
-                  </p>
-                </div>
-              </div>
-            )}
-            {profile.height_cm && (
-              <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
-                <Ruler size={14} className="text-[var(--lyra-violet)] flex-shrink-0" />
-                <div>
-                  <p className="text-[10px] text-[var(--text-muted)]">Height</p>
-                  <p className="text-sm font-bold text-[var(--text-primary)]">
-                    {profile.height_cm} cm
-                  </p>
-                </div>
-              </div>
-            )}
-            {bmi && bmiCategory && (
-              <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
-                <Heart size={14} className="text-[var(--accent-green)] flex-shrink-0" />
-                <div>
-                  <p className="text-[10px] text-[var(--text-muted)]">BMI</p>
-                  <p className={`text-sm font-bold ${bmiCategory.color}`}>
-                    {bmi}
-                  </p>
-                </div>
-              </div>
-            )}
-            {!profile.blood_group && !profile.weight_kg && !profile.height_cm && (
-              <div className="col-span-2 sm:col-span-4 text-center py-2">
-                <p className="text-sm text-[var(--text-muted)]">
-                  Complete your profile to see health stats
+            <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
+              <Droplets size={14} className="text-[var(--severity-critical)] flex-shrink-0" />
+              <div>
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  {t("home.blood", language)}
+                </p>
+                <p className="text-sm font-bold text-[var(--text-primary)]">
+                  {profile?.blood_group ?? "—"}
                 </p>
               </div>
-            )}
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
+              <Weight size={14} className="text-[var(--accent-blue)] flex-shrink-0" />
+              <div>
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  {t("home.weight", language)}
+                </p>
+                <p className="text-sm font-bold text-[var(--text-primary)]">
+                  {profile?.weight_kg ? `${profile.weight_kg} kg` : "—"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
+              <Ruler size={14} className="text-[var(--lyra-violet)] flex-shrink-0" />
+              <div>
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  {t("home.height", language)}
+                </p>
+                <p className="text-sm font-bold text-[var(--text-primary)]">
+                  {profile?.height_cm ? `${profile.height_cm} cm` : "—"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-default)] px-3 py-2">
+              <Heart size={14} className="text-[var(--accent-green)] flex-shrink-0" />
+              <div>
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  {t("home.bmi", language)}
+                </p>
+                <p
+                  className={`text-sm font-bold ${bmiCategory?.color ?? "text-[var(--text-primary)]"}`}
+                >
+                  {bmi ?? "—"}
+                </p>
+              </div>
+            </div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className="h-14 animate-pulse rounded-xl bg-[var(--bg-tertiary)]"
-              />
-            ))}
+          <div className="text-center py-4">
+            <p className="text-sm text-[var(--text-muted)]">
+              {t("home.noHealthData", language)}
+            </p>
+            <Link
+              href="/profile"
+              className="mt-2 inline-block text-xs text-[var(--accent-green)] hover:underline"
+            >
+              {t("home.completeProfile", language)}
+            </Link>
           </div>
         )}
       </motion.div>
 
-      {/* ── Daily Tip ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -282,7 +321,6 @@ export default function HomePage() {
         <DailyTip />
       </motion.div>
 
-      {/* ── Quick Actions ── */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -290,11 +328,11 @@ export default function HomePage() {
         className="mb-6"
       >
         <h2 className="mb-3 font-display text-lg font-semibold">
-          Quick Actions
+          {t("home.quickActions", language)}
         </h2>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {quickActions.map(
-            ({ href, icon: Icon, labelKey, description, color, bg, border }, i) => (
+            ({ href, icon: Icon, labelKey, descriptionKey, color, bg, border }, i) => (
               <Link key={href} href={href}>
                 <motion.div
                   whileHover={{ scale: 1.02, y: -2 }}
@@ -314,7 +352,7 @@ export default function HomePage() {
                       {t(labelKey, language)}
                     </p>
                     <p className="text-[11px] text-[var(--text-muted)]">
-                      {description}
+                      {t(descriptionKey, language)}
                     </p>
                   </div>
                 </motion.div>
@@ -324,7 +362,6 @@ export default function HomePage() {
         </div>
       </motion.section>
 
-      {/* ── Recent Activity ── */}
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -333,13 +370,13 @@ export default function HomePage() {
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-display text-lg font-semibold">
-            Recent Activity
+            {t("home.recentActivity", language)}
           </h2>
           <Link
             href="/profile"
             className="flex items-center gap-1 text-xs text-[var(--accent-green)] hover:underline"
           >
-            See all
+            {t("home.seeAll", language)}
             <ChevronRight size={13} />
           </Link>
         </div>
@@ -349,17 +386,17 @@ export default function HomePage() {
             <div className="pulse-card p-6 text-center">
               <Search size={28} className="mx-auto mb-2 text-[var(--text-muted)]" />
               <p className="text-sm font-medium text-[var(--text-secondary)]">
-                No diagnoses yet
+                {t("home.noDiagnoses", language)}
               </p>
               <p className="mt-1 text-xs text-[var(--text-muted)]">
-                Start your first AI health check
+                {t("home.startCheck", language)}
               </p>
               <Link href="/diagnostic">
                 <motion.button
                   whileTap={{ scale: 0.97 }}
                   className="mt-3 rounded-full bg-[var(--accent-green)] px-4 py-1.5 text-xs font-semibold text-[var(--text-inverse)]"
                 >
-                  Check symptoms
+                  {t("home.checkSymptoms", language)}
                 </motion.button>
               </Link>
             </div>
@@ -380,7 +417,9 @@ export default function HomePage() {
                     <div>
                       <p className="text-sm font-medium">{d.top_condition}</p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        {new Date(d.created_at).toLocaleDateString()}
+                        {new Date(d.created_at).toLocaleDateString(
+                          language === "en" ? "en-US" : "fr-FR"
+                        )}
                       </p>
                     </div>
                   </div>
@@ -400,7 +439,6 @@ export default function HomePage() {
         </AnimatePresence>
       </motion.section>
 
-      {/* ── Lyra Check-in Card ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -417,14 +455,14 @@ export default function HomePage() {
                 <div className="mb-1 flex items-center gap-2">
                   <Leaf size={16} className="text-[var(--lyra-violet)]" />
                   <span className="text-xs font-semibold text-[var(--lyra-violet)] uppercase tracking-wider">
-                    Lyra · Mental Health
+                    {t("home.lyraBadge", language)}
                   </span>
                 </div>
                 <p className="font-display text-base font-bold">
-                  How are you feeling today?
+                  {t("home.lyraTitle", language)}
                 </p>
                 <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                  Lyra is here whenever you need to talk.
+                  {t("home.lyraSubtitle", language)}
                 </p>
               </div>
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--lyra-violet)]/20 flex-shrink-0">

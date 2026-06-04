@@ -12,6 +12,8 @@ import { auth, googleProvider } from "@/lib/firebase/config";
 import { createClient } from "@/lib/supabase/client";
 import Image from "next/image";
 import type { CountryOption } from "@/types/user";
+import { saveLocalProfile } from "@/lib/storage/userLocalStorage";
+import { useHealthStore } from "@/lib/store/useHealthStore";
 
 const COUNTRIES: CountryOption[] = [
   "Togo",
@@ -82,16 +84,28 @@ export default function SignupPage() {
       const { supabaseToken } = await res.json();
       const supabase = createClient(supabaseToken);
 
-      await supabase.from("profiles").upsert({
-        id: userCredential.user.uid,
+      const profileData = {
         full_name: form.full_name,
         country: form.country,
+        date_of_birth: form.date_of_birth || undefined,
+        sex: form.sex || undefined,
+        blood_group: form.blood_group || undefined,
+        weight_kg: form.weight_kg ? parseFloat(form.weight_kg) : undefined,
+        height_cm: form.height_cm ? parseFloat(form.height_cm) : undefined,
+      };
+
+      await supabase.from("profiles").upsert({
+        id: userCredential.user.uid,
+        ...profileData,
         date_of_birth: form.date_of_birth || null,
         sex: form.sex || null,
         blood_group: form.blood_group || null,
         weight_kg: form.weight_kg ? parseFloat(form.weight_kg) : null,
         height_cm: form.height_cm ? parseFloat(form.height_cm) : null,
       });
+
+      saveLocalProfile(userCredential.user.uid, profileData);
+      useHealthStore.getState().setProfile(profileData);
 
       setLoading(false);
       router.replace("/home");

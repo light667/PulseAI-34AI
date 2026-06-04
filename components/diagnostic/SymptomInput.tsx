@@ -7,7 +7,13 @@ import { analyzeSymptoms, transcribeAudio } from "@/lib/services/diagnosisServic
 import type { DiagnosisResult } from "@/types/diagnosis";
 import DiagnosisResultView from "./DiagnosisResult";
 import { useHealthStore } from "@/lib/store/useHealthStore";
+import { useAuth } from "@/components/AuthProvider";
 import { t } from "@/lib/i18n";
+import { COMMON_SYMPTOMS } from "@/lib/diagnostic/commonSymptoms";
+import {
+  addLocalRecentActivity,
+  getLocalRecentActivity,
+} from "@/lib/storage/userLocalStorage";
 
 const LANGUAGES = [
   { code: "fr", label: "🇫🇷 Français" },
@@ -17,10 +23,16 @@ const LANGUAGES = [
   { code: "yo", label: "🇳🇬 Yoruba" },
 ];
 
-const FACTS = [
+const FACTS_FR = [
   "Le paludisme reste la maladie la plus diagnostiquée en Afrique de l'Ouest.",
   "L'hydratation est essentielle en cas de fièvre.",
   "Ne prenez jamais d'antibiotiques sans prescription médicale.",
+];
+
+const FACTS_EN = [
+  "Malaria remains the most diagnosed disease in West Africa.",
+  "Hydration is essential when you have a fever.",
+  "Never take antibiotics without a medical prescription.",
 ];
 
 interface SymptomInputProps {
@@ -29,6 +41,7 @@ interface SymptomInputProps {
 
 export default function SymptomInput({ onResult }: SymptomInputProps) {
   const [symptoms, setSymptoms] = useState("");
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
   const [mode, setMode] = useState<"text" | "voice">("text");
   const [language, setLanguage] = useState("fr");
   const [loading, setLoading] = useState(false);
@@ -39,22 +52,62 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const locale = useHealthStore((s) => s.language);
+  const setRecentDiagnoses = useHealthStore((s) => s.setRecentDiagnoses);
+  const { user } = useAuth();
+
+  const commonSymptoms = COMMON_SYMPTOMS[locale];
+  const facts = locale === "fr" ? FACTS_FR : FACTS_EN;
+
+  const toggleSymptom = (symptom: string) => {
+    setSelectedSymptoms((prev) => {
+      const next = prev.includes(symptom)
+        ? prev.filter((s) => s !== symptom)
+        : [...prev, symptom];
+      setSymptoms(next.join(", "));
+      return next;
+    });
+  };
 
   const handleAnalyze = async () => {
     if (symptoms.length < 20) {
-      setError("Please describe symptoms in at least 20 characters.");
+      setError(
+        locale === "fr"
+          ? "Décrivez vos symptômes en au moins 20 caractères."
+          : "Please describe symptoms in at least 20 characters."
+      );
       return;
     }
     setError("");
     setLoading(true);
     const interval = setInterval(
-      () => setFactIndex((i) => (i + 1) % FACTS.length),
+      () => setFactIndex((i) => (i + 1) % facts.length),
       2000
     );
     try {
       const data = await analyzeSymptoms({ symptoms, language });
       setResult(data);
       onResult?.(data);
+
+      if (user) {
+        const top = data.conditions[0]?.name ?? "Unknown";
+        const activityItem = {
+          id: crypto.randomUUID(),
+          type: "diagnosis" as const,
+          title: top,
+          severity: data.severity,
+          created_at: new Date().toISOString(),
+        };
+        addLocalRecentActivity(user.uid, activityItem);
+        const all = getLocalRecentActivity(user.uid);
+        setRecentDiagnoses(
+          all.slice(0, 3).map((a) => ({
+            id: a.id,
+            top_condition: a.title,
+            severity: a.severity ?? "LOW",
+            created_at: a.created_at,
+          }))
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analysis failed");
     } finally {
@@ -76,7 +129,11 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
           const text = await transcribeAudio(blob);
           setSymptoms(text);
         } catch {
-          setError("Voice transcription failed");
+          setError(
+            locale === "fr"
+              ? "Échec de la transcription vocale"
+              : "Voice transcription failed"
+          );
         } finally {
           setLoading(false);
         }
@@ -86,7 +143,11 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
       recorder.start();
       setRecording(true);
     } catch {
-      setError("Microphone access denied");
+      setError(
+        locale === "fr"
+          ? "Accès au microphone refusé"
+          : "Microphone access denied"
+      );
     }
   };
 
@@ -97,6 +158,28 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
 
   return (
     <div className="space-y-4">
+      <div>
+        <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
+          {t("diagnostic.commonSymptoms", locale)}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {commonSymptoms.map((symptom) => (
+            <button
+              key={symptom}
+              type="button"
+              onClick={() => toggleSymptom(symptom)}
+              className={`rounded-full px-3 py-1.5 text-xs font-medium transition-all ${
+                selectedSymptoms.includes(symptom)
+                  ? "bg-[var(--accent-green)] text-[var(--text-inverse)]"
+                  : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--accent-green-subtle)]"
+              }`}
+            >
+              {symptom}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="flex gap-2">
         {(["text", "voice"] as const).map((m) => (
           <button
@@ -128,7 +211,16 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
         <>
           <textarea
             value={symptoms}
-            onChange={(e) => setSymptoms(e.target.value)}
+            onChange={(e) => {
+              setSymptoms(e.target.value);
+              const parts = e.target.value
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean);
+              setSelectedSymptoms(
+                parts.filter((p) => commonSymptoms.includes(p))
+              );
+            }}
             placeholder={t("diagnostic.placeholder", locale)}
             className="input-field min-h-[140px] resize-y"
             maxLength={1000}
@@ -176,7 +268,7 @@ export default function SymptomInput({ onResult }: SymptomInputProps) {
 
       {loading && (
         <p className="text-center text-xs text-[var(--text-muted)]">
-          {FACTS[factIndex]}
+          {facts[factIndex]}
         </p>
       )}
 

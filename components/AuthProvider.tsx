@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { User, onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase/config";
+import { getLocalProfile } from "@/lib/storage/userLocalStorage";
+import { useHealthStore } from "@/lib/store/useHealthStore";
 
 interface AuthContextType {
   user: User | null;
@@ -26,7 +28,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
       
       if (currentUser) {
-        // Set a cookie for simple Next.js middleware protection
+        const localProfile = getLocalProfile(currentUser.uid);
+        if (localProfile) {
+          useHealthStore.getState().setProfile(localProfile);
+        }
+
         document.cookie = "pulse_auth=true; path=/; max-age=3600";
         
         // Fetch Supabase custom token
@@ -50,6 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         document.cookie = "pulse_auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
         document.cookie = "supabase_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
         setSupabaseToken(null);
+        useHealthStore.getState().setProfile(null);
+        useHealthStore.getState().setRecentDiagnoses([]);
       }
       
       setLoading(false);

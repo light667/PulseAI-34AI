@@ -17,11 +17,9 @@ import {
   Droplets,
   Weight,
   Ruler,
-  Calendar,
   MapPin,
   Activity,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/client";
 import { useHealthStore } from "@/lib/store/useHealthStore";
@@ -29,6 +27,13 @@ import type { HealthProfile } from "@/types/user";
 import { useAuth } from "@/components/AuthProvider";
 import { auth } from "@/lib/firebase/config";
 import { calculateBMI } from "@/lib/utils";
+import { t } from "@/lib/i18n";
+import {
+  getLocalProfile,
+  getLocalRecentActivity,
+  mergeProfile,
+  saveLocalProfile,
+} from "@/lib/storage/userLocalStorage";
 
 const COUNTRIES = ["Togo", "Nigeria", "Ghana", "Benin", "Côte d'Ivoire"] as const;
 const BLOOD_GROUPS = ["O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"];
@@ -68,7 +73,6 @@ export default function ProfilePage() {
   const [diagnoses, setDiagnoses] = useState<
     Array<{ id: string; top_condition: string; severity: string; created_at: string }>
   >([]);
-  const profile = useHealthStore((s) => s.profile);
   const setProfile = useHealthStore((s) => s.setProfile);
   const language = useHealthStore((s) => s.language);
   const setLanguage = useHealthStore((s) => s.setLanguage);
@@ -78,39 +82,88 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const load = async () => {
-      if (!user || !supabaseToken) return;
-      const supabase = createClient(supabaseToken);
+      if (!user) return;
 
       setEmail(user.email ?? "");
 
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.uid)
-        .single();
+      const local = getLocalProfile(user.uid);
+      let merged = local;
 
-      if (prof) {
-        setForm(prof);
-        setProfile(prof);
+      if (supabaseToken) {
+        const supabase = createClient(supabaseToken);
+        const { data: prof } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.uid)
+          .single();
+
+        merged = mergeProfile(local, prof) ?? local ?? prof;
+        if (merged) saveLocalProfile(user.uid, merged);
+
+        const { data: hist } = await supabase
+          .from("diagnoses")
+          .select("id, top_condition, severity, created_at")
+          .eq("user_id", user.uid)
+          .order("created_at", { ascending: false });
+
+        const localActivity = getLocalRecentActivity(user.uid);
+        if (localActivity.length > 0) {
+          setDiagnoses(
+            localActivity.map((a) => ({
+              id: a.id,
+              top_condition: a.title,
+              severity: a.severity ?? "LOW",
+              created_at: a.created_at,
+            }))
+          );
+        } else if (hist?.length) {
+          setDiagnoses(hist);
+        }
+      } else {
+        const localActivity = getLocalRecentActivity(user.uid);
+        if (localActivity.length > 0) {
+          setDiagnoses(
+            localActivity.map((a) => ({
+              id: a.id,
+              top_condition: a.title,
+              severity: a.severity ?? "LOW",
+              created_at: a.created_at,
+            }))
+          );
+        }
       }
 
-      const { data: hist } = await supabase
-        .from("diagnoses")
-        .select("id, top_condition, severity, created_at, result")
-        .eq("user_id", user.uid)
-        .order("created_at", { ascending: false });
-
-      if (hist) setDiagnoses(hist);
+      if (merged) {
+        setForm(merged);
+        setProfile(merged);
+      }
     };
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, supabaseToken, setProfile]);
 
   const save = async () => {
-    if (!user || !supabaseToken) return;
+    if (!user) return;
     setSaving(true);
-    const supabase = createClient(supabaseToken);
-    await supabase.from("profiles").upsert({ id: user.uid, ...form });
-    setProfile({ ...form, email } as Parameters<typeof setProfile>[0]);
+
+    saveLocalProfile(user.uid, form);
+    setProfile(form);
+
+    if (supabaseToken) {
+      const supabase = createClient(supabaseToken);
+      await supabase.from("profiles").upsert({
+        id: user.uid,
+        full_name: form.full_name,
+        country: form.country,
+        date_of_birth: form.date_of_birth || null,
+        sex: form.sex || null,
+        blood_group: form.blood_group || null,
+        weight_kg: form.weight_kg ?? null,
+        height_cm: form.height_cm ?? null,
+        language: form.language ?? language,
+      });
+    }
+
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -135,39 +188,18 @@ export default function ProfilePage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-5 pb-10">
-      {/* ── Header ── */}
       <div className="flex items-center justify-between">
-        <h1 className="font-display text-2xl font-bold">Profile</h1>
-        <motion.button
-          whileTap={{ scale: 0.95 }}
-          onClick={save}
-          disabled={saving}
-          className="flex items-center gap-2 rounded-xl bg-[var(--accent-green)] px-4 py-2 text-sm font-semibold text-[var(--text-inverse)] disabled:opacity-60 hover:brightness-110 transition-all"
-        >
-          {saved ? (
-            <>
-              <CheckCircle2 size={15} />
-              Saved!
-            </>
-          ) : saving ? (
-            "Saving..."
-          ) : (
-            <>
-              <Save size={15} />
-              Save
-            </>
-          )}
-        </motion.button>
+        <h1 className="font-display text-2xl font-bold">
+          {t("profile.title", language)}
+        </h1>
       </div>
 
-      {/* ── Profile Avatar + Stats ── */}
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         className="pulse-card p-5"
       >
         <div className="flex items-center gap-4 mb-5">
-          {/* Avatar */}
           <div className="relative">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--accent-green-subtle)] border border-[var(--border-active)] text-[var(--accent-green)] font-display text-2xl font-bold">
               {initials}
@@ -190,13 +222,12 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Key Stats Row */}
         {(form.blood_group || form.weight_kg || form.height_cm || bmi) && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {form.blood_group && (
               <StatCard
                 icon={Droplets}
-                label="Blood Type"
+                label={t("home.blood", language)}
                 value={form.blood_group}
                 color="text-[var(--severity-critical)]"
               />
@@ -204,7 +235,7 @@ export default function ProfilePage() {
             {form.weight_kg && (
               <StatCard
                 icon={Weight}
-                label="Weight"
+                label={t("home.weight", language)}
                 value={`${form.weight_kg} kg`}
                 color="text-[var(--accent-blue)]"
               />
@@ -212,7 +243,7 @@ export default function ProfilePage() {
             {form.height_cm && (
               <StatCard
                 icon={Ruler}
-                label="Height"
+                label={t("home.height", language)}
                 value={`${form.height_cm} cm`}
                 color="text-[var(--lyra-violet)]"
               />
@@ -220,7 +251,7 @@ export default function ProfilePage() {
             {bmi && (
               <StatCard
                 icon={Heart}
-                label="BMI"
+                label={t("home.bmi", language)}
                 value={`${bmi}`}
                 color="text-[var(--accent-green)]"
               />
@@ -229,7 +260,6 @@ export default function ProfilePage() {
         )}
       </motion.div>
 
-      {/* ── Personal Info ── */}
       <motion.section
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -238,7 +268,9 @@ export default function ProfilePage() {
       >
         <div className="flex items-center gap-2 mb-1">
           <User size={16} className="text-[var(--accent-green)]" />
-          <h2 className="font-display font-semibold">Personal Information</h2>
+          <h2 className="font-display font-semibold">
+            {t("profile.personalInfo", language)}
+          </h2>
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -258,7 +290,6 @@ export default function ProfilePage() {
             <label className="mb-1 block text-xs text-[var(--text-muted)]">Date of Birth</label>
             <Input
               type="date"
-              placeholder="DD/MM/YYYY"
               value={form.date_of_birth ?? ""}
               onChange={(e) => setForm({ ...form, date_of_birth: e.target.value })}
             />
@@ -279,7 +310,6 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Sex selector */}
         <div>
           <label className="mb-2 block text-xs text-[var(--text-muted)]">Sex</label>
           <div className="flex gap-2">
@@ -299,26 +329,12 @@ export default function ProfilePage() {
             ))}
           </div>
         </div>
-      </motion.section>
-
-      {/* ── Health Data ── */}
-      <motion.section
-        initial={{ opacity: 0, y: 15 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        className="pulse-card p-5 space-y-4"
-      >
-        <div className="flex items-center gap-2 mb-1">
-          <Heart size={16} className="text-[var(--severity-critical)]" />
-          <h2 className="font-display font-semibold">Health Data</h2>
-        </div>
-        <p className="text-xs text-[var(--text-muted)] -mt-2">
-          This information is private and encrypted.
-        </p>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-xs text-[var(--text-muted)]">Weight (kg)</label>
+            <label className="mb-1 block text-xs text-[var(--text-muted)]">
+              {t("home.weight", language)} (kg)
+            </label>
             <Input
               type="number"
               placeholder="e.g. 72"
@@ -329,7 +345,9 @@ export default function ProfilePage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-[var(--text-muted)]">Height (cm)</label>
+            <label className="mb-1 block text-xs text-[var(--text-muted)]">
+              {t("home.height", language)} (cm)
+            </label>
             <Input
               type="number"
               placeholder="e.g. 175"
@@ -342,13 +360,17 @@ export default function ProfilePage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-xs text-[var(--text-muted)]">Blood Group</label>
+          <label className="mb-1 block text-xs text-[var(--text-muted)]">
+            {t("home.blood", language)}
+          </label>
           <select
             className="input-field"
             value={form.blood_group ?? ""}
             onChange={(e) => setForm({ ...form, blood_group: e.target.value })}
           >
-            <option value="">Select blood group</option>
+            <option value="">
+              {language === "fr" ? "Sélectionner le groupe" : "Select blood group"}
+            </option>
             {BLOOD_GROUPS.map((b) => (
               <option key={b}>{b}</option>
             ))}
@@ -358,25 +380,38 @@ export default function ProfilePage() {
         {bmi && (
           <div className="rounded-xl bg-[var(--accent-green-subtle)] border border-[var(--border-active)] p-3">
             <p className="text-xs text-[var(--text-secondary)]">
-              Calculated BMI:{" "}
+              {t("home.bmi", language)}:{" "}
               <span className="font-bold text-[var(--accent-green)]">{bmi}</span>
-              <span className="text-[var(--text-muted)] ml-1">
-                (
-                {bmi < 18.5
-                  ? "Underweight"
-                  : bmi < 25
-                  ? "Healthy weight"
-                  : bmi < 30
-                  ? "Overweight"
-                  : "Obese"}
-                )
-              </span>
             </p>
           </div>
         )}
+
+        <p className="text-xs text-[var(--text-muted)]">
+          {t("profile.healthPrivate", language)}
+        </p>
+
+        <motion.button
+          whileTap={{ scale: 0.98 }}
+          onClick={save}
+          disabled={saving}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent-green)] py-3 text-sm font-semibold text-[var(--text-inverse)] disabled:opacity-60 hover:brightness-110 transition-all"
+        >
+          {saved ? (
+            <>
+              <CheckCircle2 size={16} />
+              {t("profile.saved", language)}
+            </>
+          ) : saving ? (
+            t("profile.saving", language)
+          ) : (
+            <>
+              <Save size={16} />
+              {t("profile.save", language)}
+            </>
+          )}
+        </motion.button>
       </motion.section>
 
-      {/* ── Preferences ── */}
       <motion.section
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -389,7 +424,6 @@ export default function ProfilePage() {
         </div>
 
         <div className="space-y-4">
-          {/* Language */}
           <div>
             <label className="mb-2 block text-xs text-[var(--text-muted)]">Language</label>
             <div className="flex gap-2">
@@ -412,7 +446,6 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* Theme */}
           <div>
             <label className="mb-2 block text-xs text-[var(--text-muted)]">Theme</label>
             <div className="flex gap-2">
@@ -435,7 +468,6 @@ export default function ProfilePage() {
         </div>
       </motion.section>
 
-      {/* ── Diagnosis History ── */}
       <motion.section
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
@@ -444,11 +476,13 @@ export default function ProfilePage() {
       >
         <div className="flex items-center gap-2 mb-4">
           <Activity size={16} className="text-[var(--accent-green)]" />
-          <h2 className="font-display font-semibold">Diagnosis History</h2>
+          <h2 className="font-display font-semibold">
+            {t("home.recentActivity", language)}
+          </h2>
         </div>
         {diagnoses.length === 0 ? (
           <p className="text-center text-sm text-[var(--text-muted)] py-4">
-            No diagnoses yet. Start your first symptom check.
+            {t("home.noDiagnoses", language)}
           </p>
         ) : (
           <div className="space-y-2">
@@ -481,12 +515,10 @@ export default function ProfilePage() {
         )}
       </motion.section>
 
-      {/* ── Account Actions ── */}
       <motion.section
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.3 }}
-        className="space-y-2"
       >
         <button
           onClick={signOut}
