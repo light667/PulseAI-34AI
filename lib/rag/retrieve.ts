@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { generateEmbedding } from "./embed";
+import { seedLyraKnowledgeIfNeeded } from "./seed";
 
 export interface RetrievedChunk {
   id: string;
@@ -19,25 +20,51 @@ const FALLBACK_CONTEXT = [
 export async function retrieveLyraContext(
   query: string,
   count = 5
-): Promise<string> {
+): Promise<{ contextText: string; retrievedChunks: RetrievedChunk[] }> {
   try {
+    // Automatically seed first if empty
+    await seedLyraKnowledgeIfNeeded();
+
     const embedding = await generateEmbedding(query);
     const supabase = await createServiceClient();
 
     const { data, error } = await supabase.rpc("match_lyra_knowledge", {
       query_embedding: embedding,
-      match_threshold: 0.5,
+      match_threshold: 0.7,
       match_count: count,
     });
 
     if (error || !data?.length) {
-      return FALLBACK_CONTEXT.slice(0, count).join("\n\n");
+      const fallbackChunks: RetrievedChunk[] = FALLBACK_CONTEXT.slice(0, count).map((content, idx) => ({
+        id: `fallback-${idx}`,
+        content,
+        source: "fallback",
+        similarity: 1.0,
+      }));
+      return {
+        contextText: FALLBACK_CONTEXT.slice(0, count).join("\n\n"),
+        retrievedChunks: fallbackChunks,
+      };
     }
 
-    return (data as RetrievedChunk[])
-      .map((c) => c.content)
-      .join("\n\n");
-  } catch {
-    return FALLBACK_CONTEXT.slice(0, count).join("\n\n");
+    const retrievedChunks = data as RetrievedChunk[];
+    const contextText = retrievedChunks.map((c) => c.content).join("\n\n");
+
+    return {
+      contextText,
+      retrievedChunks,
+    };
+  } catch (err) {
+    console.error("Retrieve error:", err);
+    const fallbackChunks: RetrievedChunk[] = FALLBACK_CONTEXT.slice(0, count).map((content, idx) => ({
+      id: `fallback-${idx}`,
+      content,
+      source: "fallback",
+      similarity: 1.0,
+    }));
+    return {
+      contextText: FALLBACK_CONTEXT.slice(0, count).join("\n\n"),
+      retrievedChunks: fallbackChunks,
+    };
   }
 }

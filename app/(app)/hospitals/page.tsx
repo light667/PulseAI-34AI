@@ -42,10 +42,12 @@ const HospitalMap = dynamic(
 const COUNTRIES: { code: CountryCode; label: string; lat: number; lon: number }[] = [
   { code: "all", label: "All Countries", lat: 6.1375, lon: 1.2255 },
   { code: "togo", label: "Togo", lat: 6.1375, lon: 1.2255 },
-  { code: "nigeria", label: "Nigeria", lat: 9.0765, lon: 7.3986 },
-  { code: "ghana", label: "Ghana", lat: 5.6037, lon: -0.187 },
-  { code: "benin", label: "Benin", lat: 6.4969, lon: 2.6289 },
+  { code: "niger", label: "Niger", lat: 13.5116, lon: 2.1254 },
+  { code: "mali", label: "Mali", lat: 12.6392, lon: -8.0029 },
   { code: "cote_divoire", label: "Côte d'Ivoire", lat: 5.36, lon: -4.0083 },
+  { code: "ghana", label: "Ghana", lat: 5.6037, lon: -0.187 },
+  { code: "burkina_faso", label: "Burkina Faso", lat: 12.3714, lon: -1.5197 },
+  { code: "benin", label: "Benin", lat: 6.4969, lon: 2.6289 },
 ];
 
 const FILTER_SERVICES = [

@@ -26,16 +26,13 @@ export async function GET(request: Request) {
     searchLon = capital.lon;
   }
 
-  let collection =
-    country !== "all"
-      ? loadCountryHospitals(country)
-      : loadAllHospitals();
+  let collection = loadAllHospitals();
 
   if (!collection || collection.features.length === 0) {
     return NextResponse.json({
       hospitals: [],
       message:
-        "No hospital data loaded. Add GeoJSON files to public/data/.",
+        "No hospital data loaded. Add GeoJSON files to Hospital_Data/.",
       center: { lat: searchLat, lon: searchLon },
     });
   }
@@ -53,7 +50,7 @@ export async function GET(request: Request) {
   const hospitals = searchNearbyHospitals(features, searchLat, searchLon, {
     services,
     limit,
-    maxDistanceKm: 100,
+    maxDistanceKm: 10000,
   });
 
   return NextResponse.json({

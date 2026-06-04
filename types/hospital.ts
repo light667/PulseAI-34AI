@@ -1,9 +1,11 @@
 export type CountryCode =
   | "togo"
-  | "nigeria"
-  | "ghana"
-  | "benin"
+  | "niger"
+  | "mali"
   | "cote_divoire"
+  | "ghana"
+  | "burkina_faso"
+  | "benin"
   | "all";
 
 export interface HospitalProperties {

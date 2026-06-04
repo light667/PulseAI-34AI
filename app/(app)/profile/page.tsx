@@ -35,7 +35,15 @@ import {
   saveLocalProfile,
 } from "@/lib/storage/userLocalStorage";
 
-const COUNTRIES = ["Togo", "Nigeria", "Ghana", "Benin", "Côte d'Ivoire"] as const;
+const COUNTRIES = [
+  "Togo",
+  "Niger",
+  "Mali",
+  "Côte d'Ivoire",
+  "Ghana",
+  "Burkina Faso",
+  "Benin",
+] as const;
 const BLOOD_GROUPS = ["O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"];
 
 function StatCard({
