@@ -46,7 +46,8 @@ def extract_hospitals(country_name: str, area_query: str) -> dict:
     out center tags;
     """
     print(f"Fetching {country_name}...")
-    response = requests.post(OVERPASS_URL, data={"data": query}, timeout=180)
+    headers = {"User-Agent": "PulseAI-HospitalExtractor/2.0 (contact: support@pulseai.org)"}
+    response = requests.post(OVERPASS_URL, data={"data": query}, headers=headers, timeout=180)
     response.raise_for_status()
     data = response.json()
 

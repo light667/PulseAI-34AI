@@ -14,8 +14,11 @@ export interface HospitalProperties {
   type: string;
   phone?: string;
   services: string[];
+  specialties: string[];
+  emergency: boolean;
+  latitude: number;
+  longitude: number;
   opening_hours?: string;
-  emergency?: boolean;
   osm_id?: number;
 }
 
@@ -36,5 +39,6 @@ export interface HospitalCollection {
 
 export interface HospitalWithDistance extends HospitalFeature {
   distanceKm: number;
+  distance: number;
   bedsEstimate?: number;
 }

@@ -39,7 +39,17 @@ export function searchNearbyHospitals(
       const [featureLon, featureLat] = feature.geometry.coordinates;
       const distanceKm = haversineDistance(lat, lon, featureLat, featureLon);
       const bedsEstimate = Math.floor(40 + Math.random() * 50);
-      return { ...feature, distanceKm, bedsEstimate };
+      const distance = parseFloat(distanceKm.toFixed(1));
+      return {
+        ...feature,
+        distanceKm,
+        distance,
+        bedsEstimate,
+        properties: {
+          ...feature.properties,
+          distance,
+        },
+      };
     })
     .filter((h) => h.distanceKm <= maxDistanceKm);
 
