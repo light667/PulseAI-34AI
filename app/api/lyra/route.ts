@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getLyraSystemPrompt } from "@/lib/prompts/lyra";
 import { retrieveLyraContext } from "@/lib/rag/retrieve";
-import { createClient, getUserFromToken } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
   try {
@@ -12,7 +11,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Message required" }, { status: 400 });
     }
 
-    // 1. & 2. Embed & Retrieve
+    // 1. & 2. Embed & Retrieve context
     const { contextText, retrievedChunks } = await retrieveLyraContext(message);
 
     // 3. Inject into prompt
@@ -58,8 +57,6 @@ export async function POST(request: Request) {
       throw new Error("No response body from Mistral API");
     }
 
-    let fullReply = "";
-
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
 
@@ -96,7 +93,6 @@ export async function POST(request: Request) {
                   const parsed = JSON.parse(dataStr);
                   const chunkText = parsed.choices?.[0]?.delta?.content || "";
                   if (chunkText) {
-                    fullReply += chunkText;
                     controller.enqueue(
                       encoder.encode(
                         JSON.stringify({ type: "chunk", text: chunkText }) + "\n"
@@ -112,38 +108,6 @@ export async function POST(request: Request) {
         } catch (e) {
           console.error("Stream reading error:", e);
         } finally {
-          // Save conversation state to Supabase
-          try {
-            const supabase = await createClient();
-            const user = await getUserFromToken();
-
-            if (user) {
-              const newMessages = [
-                ...activeHistory,
-                {
-                  role: "user",
-                  content: message,
-                  timestamp: new Date().toISOString(),
-                },
-                {
-                  role: "assistant",
-                  content: fullReply,
-                  timestamp: new Date().toISOString(),
-                },
-              ];
-              await supabase.from("lyra_conversations").upsert(
-                {
-                  user_id: user.id,
-                  messages: newMessages,
-                  updated_at: new Date().toISOString(),
-                },
-                { onConflict: "user_id" }
-              );
-            }
-          } catch (dbErr) {
-            console.error("Failed to save to Supabase:", dbErr);
-          }
-
           // Done streaming
           controller.close();
         }

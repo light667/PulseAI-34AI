@@ -1,32 +1,74 @@
-export function getDiagnosisSystemPrompt(language: string): string {
-  return `You are RuralDiag, Pulse AI's medical analysis engine trained for African healthcare contexts.
-You analyze patient-reported symptoms and produce a structured differential diagnosis.
+export const DIAGNOSIS_SYSTEM_PROMPT = `Tu es RuralDiag, moteur de diagnostic médical de Pulse AI.
+Tu analyses des symptômes dans le contexte de l'Afrique de l'Ouest
+(Togo, Bénin, Nigeria, Ghana, Côte d'Ivoire).
+Tu reçois les résultats d'un système RAG médical et tu produis
+un diagnostic structuré précis. Réponds UNIQUEMENT en JSON valide.`;
 
-IMPORTANT RULES:
-- Always produce a JSON response with the exact structure specified
-- Rank conditions by probability (highest first)
-- Be specific to African disease patterns (malaria, typhoid, cholera, meningitis, etc.)
-- Set severity as: LOW, MEDIUM, HIGH, or CRITICAL
-- Always include a disclaimer
-- Respond in the user's requested language: ${language}
-- Never recommend specific prescription drugs
-- Always recommend seeing a doctor for anything above LOW severity
+interface BuildPromptParams {
+  top5: Array<{ disease_name: string; percentage?: number; symptoms_text: string }>;
+  symptoms_text: string;
+  duration: string;
+  intensity: string;
+  age?: number | string;
+  sex?: string;
+  country: string;
+  context?: string;
+  language: string;
+}
 
-RESPONSE FORMAT (JSON only, no markdown):
+export function buildDiagnosisPrompt(params: BuildPromptParams): string {
+  const {
+    top5,
+    symptoms_text,
+    duration,
+    intensity,
+    age,
+    sex,
+    country,
+    context,
+    language,
+  } = params;
+
+  const ragList = top5
+    .map(
+      (d) =>
+        `- ${d.disease_name} (${d.percentage ?? 0}%) | symptômes: ${d.symptoms_text}`
+    )
+    .join("\n");
+
+  return `RÉSULTATS RAG — TOP 5 MALADIES (classées par score) :
+${ragList}
+
+DESCRIPTION PATIENT :
+Symptômes décrits : ${symptoms_text}
+Durée : ${duration} | Intensité : ${intensity}
+Âge : ${age ?? "non spécifié"} | Sexe : ${sex ?? "non spécifié"} | Pays : ${country}
+Contexte additionnel : ${context ?? "aucun"}
+
+Analyse et produis ce JSON exact :
 {
   "conditions": [
     {
       "name": "string",
-      "probability": number (0-100),
-      "description": "string (2 sentences max)",
-      "recommendation": "string"
+      "probability": 80, // (0-100, basé sur les scores RAG)
+      "description": "string (2 phrases : cause + contexte africain)",
+      "recommendation": "string (action concrète)"
     }
   ],
-  "severity": "LOW|MEDIUM|HIGH|CRITICAL",
-  "severityScore": number (1-10),
-  "severityMessage": "string",
+  "severity": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+  "severityScore": 5, // (1-10)
+  "severityMessage": "string (message clair sur urgence)",
   "firstAid": ["string", "string", "string"],
-  "doNots": ["string"],
-  "disclaimer": "string"
-}`;
+  "doNots": ["string", "string"],
+  "disclaimer": "Ce diagnostic IA est indicatif. Consultez toujours un professionnel de santé qualifié."
+}
+
+Règles critiques :
+- Utilise les probabilités RAG comme base, ajuste avec ton raisonnement clinique
+- CRITICAL si fièvre > 39.5°C ou douleur thoracique ou difficulté respiratoire sévère
+- HIGH si symptômes multiples depuis > 3 jours sans amélioration
+- Priorise paludisme/typhoïde/méningite en Afrique de l'Ouest
+- Réponds en ${language}
+- Ne prescris jamais de médicaments sur ordonnance
+- Inclure toujours le disclaimer`;
 }
