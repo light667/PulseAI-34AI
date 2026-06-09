@@ -117,40 +117,7 @@ export const LYRA_CORPUS: Array<{ content: string; category: string; source: str
 
 // ─── Auto-seed au démarrage ───────────────────────────────────────────────────
 
-export async function seedLyraCorpusIfEmpty(): Promise<void> {
-  try {
-    const { count } = await supabase
-      .from("lyra_knowledge")
-      .select("*", { count: "exact", head: true });
 
-    if (count && count > 0) {
-      console.log(`✅ Lyra corpus already seeded (${count} chunks)`);
-      return;
-    }
-
-    console.log("🌱 Seeding Lyra RAG corpus...");
-    let seeded = 0;
-
-    for (const doc of LYRA_CORPUS) {
-      try {
-        const embedding = await generateEmbedding(doc.content);
-        await supabase.from("lyra_knowledge").insert({
-          content: doc.content,
-          source: doc.source,
-          category: doc.category,
-          embedding,
-        });
-        seeded++;
-        await new Promise(r => setTimeout(r, 800));
-      } catch (err: any) {
-        console.error(`  ✗ Seed error for "${doc.category}": ${err.message}`);
-      }
-    }
-    console.log(`✅ Lyra corpus seeded: ${seeded}/${LYRA_CORPUS.length} chunks`);
-  } catch (err) {
-    console.error("Lyra seed error:", err);
-  }
-}
 
 // ─── RAG retrieval ────────────────────────────────────────────────────────────
 
@@ -279,6 +246,58 @@ RÈGLES ABSOLUES :
   }
 });
 
+
+router.post("/seed", async (req: Request, res: Response) => {
+  const secret = req.headers["x-ingest-secret"];
+  const validSecret = process.env.INGEST_SECRET;
+  if (validSecret && secret !== validSecret) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { count } = await supabase
+      .from("lyra_knowledge")
+      .select("*", { count: "exact", head: true });
+
+    if (count && count > 0) {
+      return res.json({ message: `Already seeded (${count} chunks)`, skipped: true });
+    }
+
+    res.json({ message: "Lyra seed started", total: LYRA_CORPUS.length });
+
+    // Seed séquentiel en arrière-plan
+    ;(async () => {
+      let seeded = 0;
+      for (const doc of LYRA_CORPUS) {
+        try {
+          const embedding = await generateEmbedding(doc.content);
+          await supabase.from("lyra_knowledge").insert({
+            content: doc.content,
+            source: doc.source,
+            category: doc.category,
+            embedding,
+          });
+          seeded++;
+          console.log(`  🌿 Lyra [${seeded}/${LYRA_CORPUS.length}] ${doc.category}`);
+          await new Promise(r => setTimeout(r, 1200));
+        } catch (err: any) {
+          console.error(`  ✗ Lyra seed ${doc.category}: ${err.message}`);
+        }
+      }
+      console.log(`✅ Lyra seeded: ${seeded}/${LYRA_CORPUS.length}`);
+    })();
+
+  } catch (err: any) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/status", async (_req: Request, res: Response) => {
+  const { count } = await supabase
+    .from("lyra_knowledge")
+    .select("*", { count: "exact", head: true });
+  res.json({ corpus_count: count || 0, ready: (count || 0) > 0 });
+});
 // ─── GET /lyra/status ─────────────────────────────────────────────────────────
 
 router.get("/status", async (_req: Request, res: Response) => {
