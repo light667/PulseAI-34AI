@@ -30,7 +30,7 @@ services:
 
       # Frontend URL for CORS (set to your deployed Next.js URL)
       - key: FRONTEND_URL
-        value: "https://pulse-34ai.web.app"   # update if different
+        value: "https://pulse-34ai.vercel.app/"   # update if different
 
       # Mistral AI (RAG diagnosis synthesis)
       - key: MISTRAL_API_KEY
