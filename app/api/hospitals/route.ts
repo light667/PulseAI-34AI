@@ -1,61 +1,54 @@
 import { NextResponse } from "next/server";
-import {
-  loadAllHospitals,
-  loadCountryHospitals,
-  COUNTRY_CAPITALS,
-} from "@/lib/hospitals/loader";
-import { searchNearbyHospitals } from "@/lib/hospitals/search";
-import type { CountryCode } from "@/types/hospital";
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://pulseai-backend.onrender.com";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const lat = parseFloat(searchParams.get("lat") ?? "");
-  const lon = parseFloat(searchParams.get("lon") ?? "");
-  const country = (searchParams.get("country") ?? "all") as CountryCode;
-  const services = searchParams.get("services")?.split(",").filter(Boolean) ?? [];
-  const query = searchParams.get("q")?.toLowerCase() ?? "";
-  const limit = parseInt(searchParams.get("limit") ?? "30", 10);
 
-  let searchLat = lat;
-  let searchLon = lon;
+  const lat = searchParams.get("lat");
+  const lon = searchParams.get("lon");
+  const services = searchParams.get("services") ?? "";
+  const query = searchParams.get("q") ?? "";
+  const limit = searchParams.get("limit") ?? "20";
 
-  if (isNaN(searchLat) || isNaN(searchLon)) {
-    const capital =
-      country !== "all" ? COUNTRY_CAPITALS[country] : COUNTRY_CAPITALS.togo;
-    searchLat = capital.lat;
-    searchLon = capital.lon;
-  }
-
-  let collection = loadAllHospitals();
-
-  if (!collection || collection.features.length === 0) {
-    return NextResponse.json({
-      hospitals: [],
-      message:
-        "No hospital data loaded. Add GeoJSON files to Hospital_Data/.",
-      center: { lat: searchLat, lon: searchLon },
-    });
-  }
-
-  let features = collection.features;
-
-  if (query) {
-    features = features.filter(
-      (f) =>
-        f.properties.name.toLowerCase().includes(query) ||
-        f.properties.city.toLowerCase().includes(query)
+  // lat et lon sont maintenant OBLIGATOIRES — viennent du GPS du navigateur
+  if (!lat || !lon || isNaN(parseFloat(lat)) || isNaN(parseFloat(lon))) {
+    return NextResponse.json(
+      {
+        error: "Position GPS requise. Veuillez autoriser l'accès à votre localisation.",
+        hospitals: [],
+        needsLocation: true,
+      },
+      { status: 400 }
     );
   }
 
-  const hospitals = searchNearbyHospitals(features, searchLat, searchLon, {
-    services,
+  const params = new URLSearchParams({
+    lat,
+    lon,
     limit,
-    maxDistanceKm: 10000,
+    ...(services && { services }),
+    ...(query && { q: query }),
   });
 
-  return NextResponse.json({
-    hospitals,
-    center: { lat: searchLat, lon: searchLon },
-    total: hospitals.length,
-  });
+  try {
+    const res = await fetch(`${BACKEND_URL}/hospitals/search?${params.toString()}`, {
+      headers: { "Content-Type": "application/json" },
+      // next: { revalidate: 60 } // cache 60s côté Next si tu veux
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ error: "Erreur backend" }));
+      return NextResponse.json(errorData, { status: res.status });
+    }
+
+    const data = await res.json();
+    return NextResponse.json(data);
+  } catch (err) {
+    console.error("[API /hospitals] Erreur:", err);
+    return NextResponse.json(
+      { error: "Le service de recherche d'hôpitaux est indisponible.", hospitals: [] },
+      { status: 503 }
+    );
+  }
 }

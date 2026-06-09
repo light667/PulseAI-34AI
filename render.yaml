@@ -17,6 +17,9 @@ services:
     autoDeploy: true
 
     envVars:
+      - key: HOSPITAL_DATA_DIR
+        value: "../Hospital_Data"
+
       - key: PORT
         value: "5000"
 
