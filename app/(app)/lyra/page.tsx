@@ -419,7 +419,7 @@ export default function LyraPage() {
           className="text-center text-xs mt-2"
           style={{ color: "var(--text-tertiary)" }}
         >
-          Lyra n'est pas un substitut à un professionnel de santé mentale.
+          {"Lyra n'est pas un substitut à un professionnel de santé mentale."}
         </p>
       </div>
     </div>

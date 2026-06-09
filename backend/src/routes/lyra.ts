@@ -116,6 +116,8 @@ export const LYRA_CORPUS: Array<{ content: string; category: string; source: str
 
 // ─── HuggingFace embedding ───────────────────────────────────────────────────
 
+// Remplacer la fonction generateEmbedding dans les 3 fichiers par celle-ci :
+
 async function generateEmbedding(text: string): Promise<number[]> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -127,18 +129,24 @@ async function generateEmbedding(text: string): Promise<number[]> {
             Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY!}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ inputs: text, options: { wait_for_model: true } }),
+          body: JSON.stringify({
+            inputs: text,
+            options: { wait_for_model: true },
+          }),
         }
       );
-      if (!res.ok) throw new Error(`HF ${res.status}`);
-      const data = await res.json();
-      return Array.isArray(data[0]) ? data[0] : data;
+      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
+
+      // Cast explicite — HuggingFace retourne number[] ou number[][]
+      const raw = await res.json() as number[] | number[][];
+      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
+
     } catch (err) {
       if (attempt === 2) throw err;
-      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
     }
   }
-  throw new Error("Embedding failed");
+  throw new Error("Embedding failed after 3 attempts");
 }
 
 // ─── Auto-seed au démarrage ───────────────────────────────────────────────────
@@ -307,7 +315,7 @@ RÈGLES ABSOLUES :
 
 // ─── GET /lyra/status ─────────────────────────────────────────────────────────
 
-router.get("/status", async (_req, res) => {
+router.get("/status", async (_req: Request, res: Response) => {
   const { count } = await supabase
     .from("lyra_knowledge")
     .select("*", { count: "exact", head: true });

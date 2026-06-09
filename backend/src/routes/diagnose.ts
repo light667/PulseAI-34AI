@@ -36,9 +36,6 @@ const GEO_BOOST: Record<string, number> = {
 // ─── HuggingFace embedding ───────────────────────────────────────────────────
 
 async function generateEmbedding(text: string): Promise<number[]> {
-  const hfKey = process.env.HUGGINGFACE_API_KEY!;
-
-  // Retry 3 fois avec backoff
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const res = await fetch(
@@ -46,16 +43,21 @@ async function generateEmbedding(text: string): Promise<number[]> {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${hfKey}`,
+            Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY!}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ inputs: text, options: { wait_for_model: true } }),
+          body: JSON.stringify({
+            inputs: text,
+            options: { wait_for_model: true },
+          }),
         }
       );
-      if (!res.ok) throw new Error(`HF Error ${res.status}`);
-      const data = await res.json();
-      // all-MiniLM-L6-v2 retourne [[...384 dims...]]
-      return Array.isArray(data[0]) ? data[0] : data;
+      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
+
+      // Cast explicite — HuggingFace retourne number[] ou number[][]
+      const raw = await res.json() as number[] | number[][];
+      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
+
     } catch (err) {
       if (attempt === 2) throw err;
       await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
