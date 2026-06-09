@@ -88,6 +88,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     // Chercher le CSV (racine du repo ou backend/data/)
     const possiblePaths = [
+      path.join(process.cwd(), "..", "public", "data", "data_symptom.csv"),
       path.join(process.cwd(), "..", "data_symptom.csv"),
       path.join(process.cwd(), "data", "data_symptom.csv"),
       path.join(process.cwd(), "data_symptom.csv"),

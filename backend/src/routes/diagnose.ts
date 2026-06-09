@@ -281,7 +281,16 @@ Règles :
     throw new Error(`Mistral error: ${err}`);
   }
 
-  const data = await res.json();
+  // ── Fix TS18046 : cast explicite du JSON response ──
+  interface MistralChatResponse {
+    choices: Array<{
+      message: {
+        content: string;
+      };
+    }>;
+  }
+
+  const data = await res.json() as MistralChatResponse;
   const content = data.choices[0].message.content;
   return JSON.parse(content);
 }
