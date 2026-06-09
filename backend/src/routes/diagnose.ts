@@ -1,8 +1,8 @@
 // backend/src/routes/diagnose.ts
-
 import { Router, Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import Groq from "groq-sdk";
+import { generateEmbedding } from "../lib/embeddings";
 
 const router = Router();
 
@@ -32,39 +32,6 @@ const GEO_BOOST: Record<string, number> = {
   "malaria falciparum": 1.9,
   "paludisme": 1.9,
 };
-
-// ─── HuggingFace embedding ───────────────────────────────────────────────────
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY!}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            inputs: text,
-            options: { wait_for_model: true },
-          }),
-        }
-      );
-      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
-
-      // Cast explicite — HuggingFace retourne number[] ou number[][]
-      const raw = await res.json() as number[] | number[][];
-      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
-
-    } catch (err) {
-      if (attempt === 2) throw err;
-      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-    }
-  }
-  throw new Error("Embedding failed after 3 attempts");
-}
 
 // ─── Groq symptom extraction ─────────────────────────────────────────────────
 

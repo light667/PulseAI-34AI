@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
+import { generateEmbedding } from "../lib/embeddings";
 
 const router = Router();
 
@@ -113,41 +114,6 @@ export const LYRA_CORPUS: Array<{ content: string; category: string; source: str
     content: "La solitude est un facteur de risque majeur pour la dépression et les maladies chroniques. Même en ville, de nombreuses personnes se sentent isolées. Des actions simples : rejoindre un groupe (sportif, religieux, associatif), planifier des contacts réguliers avec des proches, faire du bénévolat. La qualité des relations prime sur la quantité.",
   },
 ];
-
-// ─── HuggingFace embedding ───────────────────────────────────────────────────
-
-// Remplacer la fonction generateEmbedding dans les 3 fichiers par celle-ci :
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY!}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            inputs: text,
-            options: { wait_for_model: true },
-          }),
-        }
-      );
-      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
-
-      // Cast explicite — HuggingFace retourne number[] ou number[][]
-      const raw = await res.json() as number[] | number[][];
-      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
-
-    } catch (err) {
-      if (attempt === 2) throw err;
-      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
-    }
-  }
-  throw new Error("Embedding failed after 3 attempts");
-}
 
 // ─── Auto-seed au démarrage ───────────────────────────────────────────────────
 
