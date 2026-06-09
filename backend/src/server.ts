@@ -61,3 +61,29 @@ app.listen(PORT, "0.0.0.0", async () => {
     await seedLyraCorpusIfEmpty();
   }, 30000);
 });
+// Route debug — à supprimer après la démo
+app.get("/debug/files", (_req: Request, res: Response) => {
+  const fs = require("fs");
+  const path = require("path");
+  const cwd = process.cwd();
+
+  const pathsToCheck = [
+    path.join(cwd, "..", "public", "data"),
+    path.join(cwd, "..", "public"),
+    path.join(cwd, ".."),
+    "/opt/render/project/src/public/data",
+    "/opt/render/project/src",
+  ];
+
+  const results: Record<string, any> = { cwd };
+
+  for (const p of pathsToCheck) {
+    try {
+      results[p] = fs.readdirSync(p);
+    } catch {
+      results[p] = "NOT FOUND";
+    }
+  }
+
+  res.json(results);
+});
