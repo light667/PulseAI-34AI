@@ -1,131 +1,40 @@
-import { NextResponse } from "next/server";
-import { getLyraSystemPrompt } from "@/lib/prompts/lyra";
-import { retrieveLyraContext } from "@/lib/rag/retrieve";
+import { NextRequest } from "next/server";
 
-export async function POST(request: Request) {
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  process.env.BACKEND_URL ||
+  "https://pulseai-backend-dr6f.onrender.com";
+
+export async function POST(req: NextRequest) {
   try {
-    const { message, conversationHistory, history, language = "fr" } = await request.json();
-    const activeHistory = conversationHistory || history || [];
+    const body = await req.json();
 
-    if (!message?.trim()) {
-      return NextResponse.json({ error: "Message required" }, { status: 400 });
-    }
-
-    // 1. & 2. Embed & Retrieve context
-    const { contextText, retrievedChunks } = await retrieveLyraContext(message);
-
-    // 3. Inject into prompt
-    const systemPrompt = getLyraSystemPrompt(language, contextText);
-
-    // Format history for Mistral API
-    const formattedMessages = [
-      { role: "system", content: systemPrompt },
-      ...activeHistory.map((m: any) => ({
-        role: m.role,
-        content: m.content,
-      })),
-      { role: "user", content: message },
-    ];
-
-    // 4. Call Mistral API with streaming
-    const apiKey = process.env.MISTRAL_API_KEY;
-    if (!apiKey) {
-      throw new Error("MISTRAL_API_KEY is not configured");
-    }
-
-    const mistralResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    const backendRes = await fetch(`${BACKEND_URL}/lyra`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "mistral-medium-latest",
-        messages: formattedMessages,
-        stream: true,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(45000),
     });
 
-    if (!mistralResponse.ok) {
-      const errText = await mistralResponse.text();
-      console.error("Mistral API error:", errText);
-      throw new Error("Failed to generate response from Mistral");
+    if (!backendRes.ok) {
+      return new Response(
+        JSON.stringify({ error: "Backend Lyra indisponible" }),
+        { status: backendRes.status, headers: { "Content-Type": "application/json" } }
+      );
     }
 
-    const reader = mistralResponse.body?.getReader();
-    if (!reader) {
-      throw new Error("No response body from Mistral API");
-    }
-
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        // Enqueue retrieved chunks metadata first
-        controller.enqueue(
-          encoder.encode(
-            JSON.stringify({ type: "metadata", retrievedChunks }) + "\n"
-          )
-        );
-
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const cleanLine = line.trim();
-              if (!cleanLine) continue;
-
-              if (cleanLine.startsWith("data: ")) {
-                const dataStr = cleanLine.substring(6).trim();
-                if (dataStr === "[DONE]") {
-                  break;
-                }
-
-                try {
-                  const parsed = JSON.parse(dataStr);
-                  const chunkText = parsed.choices?.[0]?.delta?.content || "";
-                  if (chunkText) {
-                    controller.enqueue(
-                      encoder.encode(
-                        JSON.stringify({ type: "chunk", text: chunkText }) + "\n"
-                      )
-                    );
-                  }
-                } catch (e) {
-                  // ignore parsing errors of partial lines
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error("Stream reading error:", e);
-        } finally {
-          // Done streaming
-          controller.close();
-        }
-      },
-    });
-
-    return new Response(stream, {
+    // Streamer la réponse SSE directement au client
+    return new Response(backendRes.body, {
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
       },
     });
-  } catch (error) {
-    console.error("Lyra route error:", error);
-    return NextResponse.json(
-      { error: "Lyra is currently resting. Please try again later. 🌿" },
-      { status: 503 }
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ error: "Impossible de contacter Lyra" }),
+      { status: 503, headers: { "Content-Type": "application/json" } }
     );
   }
 }

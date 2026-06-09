@@ -83,3 +83,48 @@ CREATE POLICY "Users own conversations" ON lyra_conversations
 
 -- Storage bucket for medication scans (create in Supabase Dashboard)
 -- Name: medication-scans, Public: true
+-- Lyra knowledge base (RAG)
+CREATE TABLE IF NOT EXISTS lyra_knowledge (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  content    TEXT NOT NULL,
+  source     VARCHAR(255),
+  category   VARCHAR(100),
+  embedding  vector(384),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS lyra_knowledge_embedding_idx
+  ON lyra_knowledge
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 30);
+
+CREATE OR REPLACE FUNCTION match_lyra_knowledge(
+  query_embedding vector(384),
+  match_threshold FLOAT,
+  match_count     INT
+) RETURNS TABLE (
+  id         UUID,
+  content    TEXT,
+  source     VARCHAR,
+  similarity FLOAT
+)
+LANGUAGE SQL STABLE AS $$
+  SELECT id, content, source,
+    1 - (embedding <=> query_embedding) AS similarity
+  FROM lyra_knowledge
+  WHERE 1 - (embedding <=> query_embedding) > match_threshold
+  ORDER BY embedding <=> query_embedding
+  LIMIT match_count;
+$$;
+
+-- Conversations (historique persistant)
+CREATE TABLE IF NOT EXISTS lyra_conversations (
+  id         UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id    UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+  messages   JSONB NOT NULL DEFAULT '[]',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE lyra_conversations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "own_conversations" ON lyra_conversations
+  FOR ALL USING (auth.uid() = user_id);

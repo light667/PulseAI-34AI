@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── THÈME SOMBRE (défaut) ───────────────────────────────────────────────── */
+:root {
+  --bg-primary:    #050F1C;
+  --bg-secondary:  #0A1A2E;
+  --bg-tertiary:   #0F2444;
+  --bg-glass:      rgba(10, 26, 46, 0.7);
+
+  --accent-green:        #00FF87;
+  --accent-green-dim:    #00CC6A;
+  --accent-green-glow:   rgba(0, 255, 135, 0.15);
+  --accent-green-subtle: rgba(0, 255, 135, 0.08);
+
+  --accent-orange:     #FF6B35;
+  --accent-blue:       #4FC3F7;
+
+  /* Lyra accent */
+  --lyra-teal:   #5EEAD4;
+  --lyra-violet: #A78BFA;
+  --lyra-glow:   rgba(167, 139, 250, 0.15);
+
+  --text-primary:   #F0F4FF;
+  --text-secondary: #8BA4C4;
+  --text-tertiary:  #4A6080;
+  --text-inverse:   #050F1C;
+
+  --severity-low:      #00FF87;
+  --severity-medium:   #FFD166;
+  --severity-high:     #FF6B35;
+  --severity-critical: #FF3B5C;
+
+  --border-default: rgba(75, 120, 180, 0.15);
+  --border-active:  rgba(0, 255, 135, 0.3);
+  --border-glass:   rgba(255, 255, 255, 0.06);
+
+  color-scheme: dark;
+}
+
+/* ── THÈME CLAIR ─────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg-primary:    #F8FAFF;
+  --bg-secondary:  #FFFFFF;
+  --bg-tertiary:   #EEF2FF;
+  --bg-glass:      rgba(255, 255, 255, 0.8);
+
+  --accent-green:        #00A65A;
+  --accent-green-dim:    #008A4A;
+  --accent-green-glow:   rgba(0, 166, 90, 0.12);
+  --accent-green-subtle: rgba(0, 166, 90, 0.06);
+
+  --accent-orange:     #E55A26;
+  --accent-blue:       #0288D1;
+
+  --lyra-teal:   #0D9488;
+  --lyra-violet: #7C3AED;
+  --lyra-glow:   rgba(124, 58, 237, 0.1);
+
+  --text-primary:   #0D1B2E;
+  --text-secondary: #3D5A80;
+  --text-tertiary:  #8BA4C4;
+  --text-inverse:   #FFFFFF;
+
+  --severity-low:      #00A65A;
+  --severity-medium:   #B45309;
+  --severity-high:     #C2410C;
+  --severity-critical: #DC2626;
+
+  --border-default: rgba(30, 60, 120, 0.12);
+  --border-active:  rgba(0, 166, 90, 0.35);
+  --border-glass:   rgba(0, 0, 0, 0.06);
+
+  color-scheme: light;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Syne', sans-serif;
+}
+
+/* Scrollbar custom */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-green-glow);
+}
+
+/* Utility Lyra */
+.lyra-gradient {
+  background: linear-gradient(135deg, var(--lyra-teal), var(--lyra-violet));
+}
+
+.lyra-glow-ring {
+  box-shadow: 0 0 20px var(--lyra-glow);
+}
+
+/* Glass panel */
+.glass-panel {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+}
+
+/* Scrollbar hide utility */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
