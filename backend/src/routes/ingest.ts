@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
-import { generateEmbedding } from "../lib/embeddings";
 
 const router = Router();
 
@@ -18,8 +17,52 @@ const GEO_BOOST: Record<string, number> = {
   "lassa fever": 1.2, "hepatitis": 1.2, "pneumonia": 1.2,
 };
 
-function averageEmbeddings(a: number[], b: number[]): number[] {
-  return a.map((v, i) => (v + b[i]) / 2);
+// ── HuggingFace API directement — pas de modèle local ───────────────────────
+async function embedHF(text: string): Promise<number[]> {
+  const HF_KEY = process.env.HUGGINGFACE_API_KEY!;
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetch(
+        "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${HF_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            inputs: text.slice(0, 400),
+            options: { wait_for_model: true },
+          }),
+        }
+      );
+
+      if (res.status === 503) {
+        console.log("   ⏳ HF model loading, waiting 15s...");
+        await sleep(15000);
+        continue;
+      }
+      if (res.status === 429) {
+        console.log("   ⏳ HF rate limit, waiting 30s...");
+        await sleep(30000);
+        continue;
+      }
+      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
+
+      const raw = await res.json() as number[] | number[][];
+      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
+
+    } catch (err) {
+      if (attempt === 3) throw err;
+      await sleep(2000 * (attempt + 1));
+    }
+  }
+  throw new Error("Embed failed after 4 attempts");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 function parseCSV(content: string): Record<string, string>[] {
@@ -37,36 +80,29 @@ function parseCSV(content: string): Record<string, string>[] {
 }
 
 function findCSV(): string | null {
-  // Render clone le repo dans /opt/render/project/src/
-  // Le backend tourne depuis /opt/render/project/src/backend
   const cwd = process.cwd();
-  const possiblePaths = [
-    path.join(cwd, "..", "public", "data", "data_symptom.csv"),
-    path.join(cwd, "..", "public", "data", "diseases_symptoms.csv"),
-    path.join(cwd, "..", "data_symptom.csv"),
-    path.join(cwd, "..", "data", "data_symptom.csv"),
-    path.join(cwd, "data", "data_symptom.csv"),
-    path.join(cwd, "data_symptom.csv"),
-    // Chemin absolu Render
+  const candidates = [
+    // Chemin exact confirmé par debug Render
     "/opt/render/project/src/public/data/data_symptom.csv",
-    "/opt/render/project/src/public/data/diseases_symptoms.csv",
-    "/opt/render/project/src/data_symptom.csv",
+    path.join(cwd, "..", "public", "data", "data_symptom.csv"),
+    path.join(cwd, "..", "data_symptom.csv"),
+    path.join(cwd, "data_symptom.csv"),
   ];
-
-  console.log("📂 CWD:", cwd);
-  for (const p of possiblePaths) {
+  for (const p of candidates) {
     if (fs.existsSync(p)) {
-      console.log("✅ CSV found:", p);
+      console.log(`✅ CSV found: ${p}`);
       return p;
     }
   }
-  console.error("❌ CSV not found. Searched:", possiblePaths);
+  console.error("❌ CSV not found. Searched:", candidates);
   return null;
 }
 
+// ── POST /ingest ─────────────────────────────────────────────────────────────
 router.post("/", async (req: Request, res: Response) => {
   const secret = req.headers["x-ingest-secret"];
-  if (secret !== process.env.INGEST_SECRET) {
+  const validSecret = process.env.INGEST_SECRET;
+  if (validSecret && secret !== validSecret) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
@@ -86,15 +122,13 @@ router.post("/", async (req: Request, res: Response) => {
     const csvPath = findCSV();
     if (!csvPath) {
       return res.status(404).json({
-        error: "data_symptom.csv not found on server",
-        hint: "Place the CSV at public/data/data_symptom.csv in the repo root",
+        error: "data_symptom.csv not found",
+        cwd: process.cwd(),
       });
     }
 
-    const csvContent = fs.readFileSync(csvPath, "utf-8");
-    const rows = parseCSV(csvContent);
+    const rows = parseCSV(fs.readFileSync(csvPath, "utf-8"));
 
-    // Dédoublonner par maladie
     const diseaseMap = new Map<string, Set<string>>();
     for (const row of rows) {
       const disease = row["diseases"]?.trim();
@@ -108,62 +142,47 @@ router.post("/", async (req: Request, res: Response) => {
     }
 
     const diseases = Array.from(diseaseMap.entries());
-    console.log(`🔬 ${diseases.length} diseases to ingest`);
+    console.log(`🔬 ${diseases.length} diseases to ingest via HuggingFace API`);
 
-    // Répondre immédiatement — ingestion async
+    // Répondre immédiatement
     res.json({
       message: "Ingestion started",
       total: diseases.length,
-      status: "processing",
+      note: "Check /ingest/status for progress",
     });
 
-    // Ingestion en arrière-plan
+    // Ingestion async
     (async () => {
       let success = 0;
-      let errors = 0;
-      const BATCH = 3; // Petit batch pour ne pas saturer le modèle local
+      let errors  = 0;
 
-      for (let i = 0; i < diseases.length; i += BATCH) {
-        const batch = diseases.slice(i, i + BATCH);
+      for (const [disease, symptomsSet] of diseases) {
+        try {
+          const symptomsText = Array.from(symptomsSet).join(", ");
+          const geoBoost = GEO_BOOST[disease.toLowerCase()] || 1.0;
 
-        for (const [disease, symptomsSet] of batch) {
-          try {
-            const symptomsText = Array.from(symptomsSet).join(", ");
-            const richText = `Patient with ${disease} presents: ${symptomsText}. Common disease in West Africa.`;
-            const geoBoost = GEO_BOOST[disease.toLowerCase()] || 1.0;
+          const embedding = await embedHF(symptomsText);
 
-            // Double embedding → moyenne
-            const [embA, embB] = await Promise.all([
-              generateEmbedding(symptomsText),
-              generateEmbedding(richText),
-            ]);
-            const embedding = averageEmbeddings(embA, embB);
+          const { error } = await supabase.from("disease_embeddings").insert({
+            disease_name:  disease,
+            symptoms_text: symptomsText,
+            rich_text:     `Patient with ${disease}: ${symptomsText}. West Africa.`,
+            symptom_list:  Array.from(symptomsSet),
+            geo_boost:     geoBoost,
+            embedding,
+          });
 
-            const { error } = await supabase
-              .from("disease_embeddings")
-              .insert({
-                disease_name: disease,
-                symptoms_text: symptomsText,
-                rich_text: richText,
-                symptom_list: Array.from(symptomsSet),
-                geo_boost: geoBoost,
-                embedding,
-              });
+          if (error) throw new Error(error.message);
+          success++;
+          console.log(`  ✓ [${success}/${diseases.length}] ${disease}`);
 
-            if (error) throw error;
-            success++;
-            console.log(`  ✓ [${success}/${diseases.length}] ${disease}`);
-          } catch (err: any) {
-            errors++;
-            console.error(`  ✗ ${disease}: ${err.message}`);
-          }
+          // 1.1s entre chaque appel HF
+          await sleep(1100);
 
-          // Pause entre chaque item pour le modèle local
-          await new Promise(r => setTimeout(r, 200));
+        } catch (err: any) {
+          errors++;
+          console.error(`  ✗ ${disease}: ${err.message}`);
         }
-
-        // Pause entre batches
-        await new Promise(r => setTimeout(r, 500));
       }
 
       console.log(`\n✅ Ingestion done: ${success} ok, ${errors} errors`);
@@ -177,6 +196,7 @@ router.post("/", async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /ingest/status ────────────────────────────────────────────────────────
 router.get("/status", async (_req: Request, res: Response) => {
   const { count, error } = await supabase
     .from("disease_embeddings")
