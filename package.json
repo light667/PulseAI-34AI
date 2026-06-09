@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "ingest": "tsx scripts/ingest-corpus.ts"
+    "ingest": "tsx scripts/ingest-corpus.ts",
+    "ingest:diseases": "tsx scripts/ingest-diseases.ts",
+    "backend:dev": "cd backend && npm run dev",
+    "backend:build": "cd backend && npm run build"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",

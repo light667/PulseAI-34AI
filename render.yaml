@@ -1,0 +1,51 @@
+# ============================================================
+# Render.yaml — PulseAI Backend Deployment
+# https://render.com/docs/render-yaml-spec
+# ============================================================
+
+services:
+  - type: web
+    name: pulseai-backend
+    runtime: node
+    region: frankfurt           # closest to West Africa (low latency)
+    plan: free                  # upgrade to starter for always-on
+
+    # Build configuration
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+
+    # Health check — Render pings this to confirm the service is up
+    healthCheckPath: /health
+
+    # Auto-deploy on push to main
+    autoDeploy: true
+
+    # Environment variables
+    # ⚠ Set the actual values in the Render Dashboard under "Environment"
+    envVars:
+      # Server
+      - key: PORT
+        value: "5000"
+
+      # Frontend URL for CORS (set to your deployed Next.js URL)
+      - key: FRONTEND_URL
+        value: "https://pulse-34ai.web.app"   # update if different
+
+      # Mistral AI (RAG diagnosis synthesis)
+      - key: MISTRAL_API_KEY
+        sync: false           # secrets → enter value in Render dashboard
+
+      # Groq (NLP symptom extraction)
+      - key: GROQ_API_KEY
+        sync: false
+
+      # HuggingFace (384-dim sentence embeddings)
+      - key: HUGGINGFACE_API_KEY
+        sync: false
+
+      # Supabase (vector DB)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

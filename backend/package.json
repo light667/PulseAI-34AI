@@ -1,12 +1,13 @@
 {
   "name": "pulse-ai-backend",
   "version": "1.0.0",
-  "description": "Render standalone Express backend for Pulse AI diagnostic and Lyra RAG systems",
+  "description": "PulseAI Express backend — Diagnostic RAG + Lyra therapist (deployed on Render)",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js"
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc --project tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
@@ -20,5 +21,8 @@
     "@types/node": "^20.11.24",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

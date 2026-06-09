@@ -1,51 +1,88 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { createClient } from "@supabase/supabase-js";
+import path from "path";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Load environment variables
-dotenv.config();
+// ── Environment ───────────────────────────────────────────────────────────
+dotenv.config({ path: path.join(__dirname, "../.env") });
+dotenv.config({ path: path.join(__dirname, "../../.env") });
+dotenv.config({ path: path.join(__dirname, "../../.env.local") });
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = parseInt(process.env.PORT || "5000", 10);
 
-app.use(cors());
-app.use(express.json());
+// ── CORS ─────────────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  process.env.FRONTEND_URL,
+  process.env.NEXT_PUBLIC_APP_URL,
+].filter(Boolean) as string[];
 
-// Initialize Supabase Client
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // Allow requests with no origin (curl, Render health checks)
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.some((o) => origin.startsWith(o))) return cb(null, true);
+      cb(new Error(`CORS: Origin ${origin} not allowed`));
+    },
+    credentials: true,
+  })
+);
+app.use(express.json({ limit: "2mb" }));
 
-let supabase: any = null;
-if (supabaseUrl && supabaseKey) {
-  supabase = createClient(supabaseUrl, supabaseKey);
+// ── Supabase client ───────────────────────────────────────────────────────
+let supabase: SupabaseClient | null = null;
+const sbUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const sbKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+
+if (sbUrl && sbKey) {
+  supabase = createClient(sbUrl, sbKey);
+  console.log("✅  Supabase client ready");
 } else {
-  console.warn("⚠️ Warning: Supabase is not fully configured. Vector operations will fail.");
+  console.warn("⚠️  Supabase not configured — vector search will be unavailable");
 }
 
-// -------------------------------------------------------------
-// HELPERS
-// -------------------------------------------------------------
-
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// ── Types ─────────────────────────────────────────────────────────────────
+interface ExtractionResult {
+  symptoms_en: string[];
+  symptoms_query: string;
+  duration: string;
+  intensity: string;
+  body_parts: string[];
+  fever: boolean;
+  chronic_indicators: boolean;
 }
 
-// HuggingFace Embeddings query extraction
+interface DiseaseMatch {
+  disease_name: string;
+  symptoms_text: string;
+  similarity: number;
+  geo_boost: number;
+  final_score: number;
+  percentage?: number;
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// ── HuggingFace Embeddings ────────────────────────────────────────────────
 async function embedQuery(text: string): Promise<number[]> {
   const apiKey = process.env.HUGGINGFACE_API_KEY;
-  if (!apiKey) {
-    throw new Error("HUGGINGFACE_API_KEY is not configured");
-  }
+  if (!apiKey) throw new Error("HUGGINGFACE_API_KEY not configured");
 
   const HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
-  let attempt = 0;
-  const maxAttempts = 3;
-  let delay = 1000;
+  let delay = 1200;
 
-  while (attempt < maxAttempts) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const response = await fetch(
+      const res = await fetch(
         `https://api-inference.huggingface.co/pipeline/feature-extraction/${HF_MODEL}`,
         {
           method: "POST",
@@ -57,74 +94,71 @@ async function embedQuery(text: string): Promise<number[]> {
         }
       );
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`HuggingFace API error: ${response.status} - ${errText}`);
+      if (!res.ok) {
+        const err = await res.text();
+        if (res.status === 503) {
+          console.warn(`[Embed] Model loading (attempt ${attempt}/3) — waiting…`);
+          await sleep(delay * 2);
+          delay *= 2;
+          continue;
+        }
+        throw new Error(`HF API ${res.status}: ${err.slice(0, 200)}`);
       }
 
-      const result = await response.json();
+      const result = await res.json();
       if (Array.isArray(result)) {
-        if (Array.isArray(result[0])) {
-          return result[0].flat() as number[];
-        }
-        return result as number[];
+        const vec = Array.isArray(result[0])
+          ? (result[0] as number[])
+          : (result as number[]);
+        if (vec.length === 384) return vec;
+        // handle nested: [[...384 values...]]
+        const flat = (result as number[][]).flat();
+        if (flat.length === 384) return flat;
+        throw new Error(`Unexpected embedding length: ${vec.length}`);
       }
-      throw new Error("Invalid embedding response structure");
-    } catch (error) {
-      attempt++;
-      console.warn(`[Backend] Embedding attempt ${attempt} failed: ${error}`);
-      if (attempt >= maxAttempts) throw error;
+      throw new Error("Unexpected HF response shape");
+    } catch (err) {
+      console.warn(`[Embed] Attempt ${attempt}/3 failed: ${err}`);
+      if (attempt === 3) throw err;
       await sleep(delay);
       delay *= 2;
     }
   }
-  throw new Error("Failed to generate embedding");
+  throw new Error("Embedding failed after 3 attempts");
 }
 
-// Groq NLP symptom extractor
-interface ExtractionResult {
-  symptoms_en: string[];
-  symptoms_query: string;
-  duration: string;
-  intensity: string;
-  body_parts: string[];
-  fever: boolean;
-  chronic_indicators: boolean;
-}
-
-async function extractSymptoms(text: string, language: string): Promise<ExtractionResult> {
+// ── Groq NLP Symptom Extractor ────────────────────────────────────────────
+async function extractSymptoms(
+  text: string,
+  language: string
+): Promise<ExtractionResult> {
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    throw new Error("GROQ_API_KEY is not configured");
-  }
+  if (!apiKey) throw new Error("GROQ_API_KEY not configured");
 
-  const systemPrompt = `Tu es un extracteur médical précis. Tu reçois une description de symptômes en langage naturel et tu extrais les informations structurées.
-Réponds UNIQUEMENT en JSON valide, aucun texte autour.`;
+  const systemPrompt =
+    "Tu es un extracteur médical précis. Tu reçois une description de symptômes en langage naturel et extrais les informations structurées. Réponds UNIQUEMENT en JSON valide, aucun texte autour.";
 
-  const userPrompt = `Texte : ${text}
+  const userPrompt = `Texte du patient (langue: ${language}): "${text}"
 
-Extrais et retourne ce JSON :
+Extrais et retourne ce JSON exact:
 {
-  "symptoms_en": ["symptom1", "symptom2", ...],
-  "symptoms_query": "courte phrase en anglais listant les symptômes pour recherche vectorielle",
+  "symptoms_en": ["symptom1_en", "symptom2_en"],
+  "symptoms_query": "short english phrase of all symptoms for vector search",
   "duration": "hours|1_day|2_3_days|1_week|more|unknown",
   "intensity": "mild|moderate|severe|unknown",
-  "body_parts": ["head", "chest", ...],
-  "fever": true|false,
-  "chronic_indicators": true|false
+  "body_parts": ["head", "chest", "abdomen"],
+  "fever": true,
+  "chronic_indicators": false
 }
 
-Règles :
-- symptoms_en : utilise les termes médicaux anglais standards du dataset (fever, headache, fatigue, nausea, vomiting, diarrhea, cough, shortness of breath, chest pain, abdominal pain, back pain, joint pain, skin rash, dizziness, loss of appetite, etc.)
-- symptoms_query : phrase optimisée pour similarité vectorielle, ex: 'fever headache fatigue nausea 3 days moderate'
-- Si un symptôme est ambigu, l'inclure quand même`;
+Règles:
+- symptoms_en: termes médicaux anglais standards (fever, headache, fatigue, nausea, vomiting, diarrhea, cough, shortness_of_breath, chest_pain, abdominal_pain, back_pain, joint_pain, skin_rash, dizziness, loss_of_appetite, chills, sweating, sore_throat, runny_nose, muscle_pain)
+- symptoms_query: phrase optimisée pour similarité vectorielle ex: "fever headache fatigue nausea 3 days moderate"
+- Si symptôme ambigu, l'inclure quand même`;
 
-  let attempt = 0;
-  const maxAttempts = 2;
-
-  while (attempt < maxAttempts) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -138,111 +172,95 @@ Règles :
           ],
           temperature: 0.1,
           response_format: { type: "json_object" },
+          max_tokens: 500,
         }),
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Groq API error: ${response.status} - ${errText}`);
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Groq API ${res.status}: ${err.slice(0, 200)}`);
       }
 
-      const data = await response.json();
+      const data = await res.json();
       const content = data.choices?.[0]?.message?.content;
-      if (!content) throw new Error("No response content from Groq");
+      if (!content) throw new Error("Empty Groq response");
 
-      return JSON.parse(content) as ExtractionResult;
-    } catch (error) {
-      attempt++;
-      console.warn(`[Backend] Extraction attempt ${attempt} failed: ${error}`);
-      if (attempt >= maxAttempts) throw error;
+      const parsed = JSON.parse(content) as ExtractionResult;
+      // Sanitize
+      if (!Array.isArray(parsed.symptoms_en)) parsed.symptoms_en = [];
+      if (!parsed.symptoms_query) parsed.symptoms_query = parsed.symptoms_en.join(" ");
+      return parsed;
+    } catch (err) {
+      console.warn(`[Extract] Attempt ${attempt}/2 failed: ${err}`);
+      if (attempt === 2) throw err;
     }
   }
   throw new Error("Symptom extraction failed");
 }
 
-// Supabase Disease Retriever
-interface DiseaseMatch {
-  disease_name: string;
-  symptoms_text: string;
-  similarity: number;
-  geo_boost: number;
-  final_score: number;
-  percentage?: number;
-}
+// ── Supabase Vector Search ────────────────────────────────────────────────
+async function retrieveDiseases(
+  extraction: ExtractionResult
+): Promise<DiseaseMatch[]> {
+  if (!supabase) throw new Error("Supabase not initialized");
 
-async function retrieveDiseases(extraction: ExtractionResult): Promise<DiseaseMatch[]> {
-  if (!supabase) {
-    throw new Error("Supabase client is not initialized");
+  // Dual query: symptoms_query + raw symptom list → merge with consensus bonus
+  const [embA, embB] = await Promise.all([
+    embedQuery(extraction.symptoms_query),
+    embedQuery(extraction.symptoms_en.join(", ")),
+  ]);
+
+  const [resA, resB] = await Promise.all([
+    supabase.rpc("match_diseases", { query_embedding: embA, match_count: 8 }),
+    supabase.rpc("match_diseases", { query_embedding: embB, match_count: 8 }),
+  ]);
+
+  if (resA.error) throw new Error(`match_diseases A: ${resA.error.message}`);
+  if (resB.error) throw new Error(`match_diseases B: ${resB.error.message}`);
+
+  const merged = new Map<string, DiseaseMatch>();
+
+  for (const r of (resA.data || []) as DiseaseMatch[]) {
+    merged.set(r.disease_name.toLowerCase(), { ...r });
   }
 
-  // Double vector query retrieval
-  const embeddingA = await embedQuery(extraction.symptoms_query);
-  const { data: dataA, error: errorA } = await supabase.rpc("match_diseases", {
-    query_embedding: embeddingA,
-    match_count: 8,
-  });
-
-  if (errorA) throw new Error(`match_diseases A failed: ${errorA.message}`);
-
-  const symptomString = extraction.symptoms_en.join(", ");
-  const embeddingB = await embedQuery(symptomString);
-  const { data: dataB, error: errorB } = await supabase.rpc("match_diseases", {
-    query_embedding: embeddingB,
-    match_count: 8,
-  });
-
-  if (errorB) throw new Error(`match_diseases B failed: ${errorB.message}`);
-
-  const resultsA = (dataA || []) as DiseaseMatch[];
-  const resultsB = (dataB || []) as DiseaseMatch[];
-
-  const mergedMap = new Map<string, DiseaseMatch>();
-
-  resultsA.forEach((r) => {
-    mergedMap.set(r.disease_name.toLowerCase(), { ...r });
-  });
-
-  resultsB.forEach((r) => {
+  for (const r of (resB.data || []) as DiseaseMatch[]) {
     const key = r.disease_name.toLowerCase();
-    if (mergedMap.has(key)) {
-      const existing = mergedMap.get(key)!;
-      const avgSimilarity = (existing.similarity + r.similarity) / 2;
-      const avgScore = (existing.final_score + r.final_score) / 2;
-      existing.similarity = avgSimilarity;
-      existing.final_score = avgScore * 1.15; // consensus bonus
+    if (merged.has(key)) {
+      const existing = merged.get(key)!;
+      // Consensus bonus: diseases appearing in BOTH queries get +15%
+      existing.similarity = (existing.similarity + r.similarity) / 2;
+      existing.final_score = ((existing.final_score + r.final_score) / 2) * 1.15;
     } else {
-      mergedMap.set(key, { ...r });
+      merged.set(key, { ...r });
     }
-  });
+  }
 
-  let sortedMatches = Array.from(mergedMap.values())
+  let top5 = Array.from(merged.values())
     .sort((a, b) => b.final_score - a.final_score)
     .slice(0, 5);
 
-  const scoreSum = sortedMatches.reduce((sum, match) => sum + match.final_score, 0);
-  if (scoreSum > 0) {
-    sortedMatches = sortedMatches.map((m) => ({
+  // Normalize to percentages (sum = 100%)
+  const total = top5.reduce((s, m) => s + m.final_score, 0);
+  if (total > 0) {
+    top5 = top5.map((m) => ({
       ...m,
-      percentage: Math.round((m.final_score / scoreSum) * 100),
+      percentage: Math.round((m.final_score / total) * 100),
     }));
   } else {
-    sortedMatches = sortedMatches.map((m) => ({
-      ...m,
-      percentage: Math.round(100 / sortedMatches.length),
-    }));
+    top5 = top5.map((m) => ({ ...m, percentage: Math.round(100 / top5.length) }));
   }
 
-  return sortedMatches;
+  return top5;
 }
 
-// Diagnosis prompts
+// ── Diagnosis Prompt Builder ──────────────────────────────────────────────
 const DIAGNOSIS_SYSTEM_PROMPT = `Tu es RuralDiag, moteur de diagnostic médical de Pulse AI.
-Tu analyses des symptômes dans le contexte de l'Afrique de l'Ouest
-(Togo, Bénin, Nigeria, Ghana, Côte d'Ivoire).
-Tu reçois les résultats d'un système RAG médical et tu produis
-un diagnostic structuré précis. Réponds UNIQUEMENT en JSON valide.`;
+Tu analyses des symptômes dans le contexte de l'Afrique de l'Ouest (Togo, Bénin, Nigeria, Ghana, Côte d'Ivoire).
+Tu reçois les résultats d'un système RAG médical et produis un diagnostic structuré précis.
+Réponds UNIQUEMENT en JSON valide, aucun texte avant ou après.`;
 
-interface BuildPromptParams {
+function buildDiagnosisPrompt(params: {
   top5: DiseaseMatch[];
   symptoms_text: string;
   duration: string;
@@ -252,54 +270,59 @@ interface BuildPromptParams {
   country: string;
   context?: string;
   language: string;
-}
+}): string {
+  const ragList =
+    params.top5.length > 0
+      ? params.top5
+          .map(
+            (d) =>
+              `- ${d.disease_name} (${d.percentage ?? 0}%) | similarité: ${(d.similarity * 100).toFixed(1)}% | symptômes: ${d.symptoms_text.slice(0, 100)}`
+          )
+          .join("\n")
+      : "- Aucune correspondance vectorielle trouvée — raisonnement clinique pur requis";
 
-function buildDiagnosisPrompt(params: BuildPromptParams): string {
-  const { top5, symptoms_text, duration, intensity, age, sex, country, context, language } = params;
-
-  const ragList = top5
-    .map((d) => `- ${d.disease_name} (${d.percentage ?? 0}%) | symptômes: ${d.symptoms_text}`)
-    .join("\n");
-
-  return `RÉSULTATS RAG — TOP 5 MALADIES (classées par score) :
+  return `RÉSULTATS RAG — TOP 5 MALADIES (classées par score vectoriel):
 ${ragList}
 
-DESCRIPTION PATIENT :
-Symptômes décrits : ${symptoms_text}
-Durée : ${duration} | Intensité : ${intensity}
-Âge : ${age ?? "non spécifié"} | Sexe : ${sex ?? "non spécifié"} | Pays : ${country}
-Contexte additionnel : ${context ?? "aucun"}
+PROFIL PATIENT:
+Symptômes décrits: ${params.symptoms_text}
+Durée: ${params.duration} | Intensité: ${params.intensity}
+Âge: ${params.age ?? "non spécifié"} | Sexe: ${params.sex ?? "non spécifié"} | Pays: ${params.country}
+Contexte: ${params.context ?? "aucun"}
 
-Analyse et produis ce JSON exact :
+Produis ce JSON exact (aucun commentaire, aucun markdown):
 {
   "conditions": [
     {
-      "name": "string",
-      "probability": 80,
-      "description": "string (2 phrases : cause + contexte africain)",
-      "recommendation": "string (action concrète)"
+      "name": "Nom de la maladie",
+      "probability": 85,
+      "description": "Description en 2 phrases: cause + contexte africain",
+      "recommendation": "Action concrète et immédiate"
     }
   ],
-  "severity": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
-  "severityScore": 5,
-  "severityMessage": "string (message clair sur urgence)",
-  "firstAid": ["string", "string", "string"],
-  "doNots": ["string", "string"],
+  "severity": "LOW",
+  "severityScore": 4,
+  "severityMessage": "Message clair sur l'urgence",
+  "firstAid": ["Action 1", "Action 2", "Action 3"],
+  "doNots": ["Ne pas faire 1", "Ne pas faire 2"],
   "disclaimer": "Ce diagnostic IA est indicatif. Consultez toujours un professionnel de santé qualifié."
 }
 
-Règles critiques :
-- Utilise les probabilités RAG comme base, ajuste avec ton raisonnement clinique
-- CRITICAL si fièvre > 39.5°C ou douleur thoracique ou difficulté respiratoire sévère
-- HIGH si symptômes multiples depuis > 3 jours sans amélioration
-- Priorise paludisme/typhoïde/méningite en Afrique de l'Ouest
-- Réponds en ${language}
-- Ne prescris jamais de médicaments sur ordonnance
+Règles critiques:
+- severity: "CRITICAL" si fièvre > 39.5°C, douleur thoracique, ou détresse respiratoire sévère
+- severity: "HIGH" si symptômes multiples depuis > 3 jours ou aggravation rapide
+- severity: "MEDIUM" si symptômes modérés < 3 jours
+- severity: "LOW" si symptômes légers ou en amélioration
+- severityScore: 1-10 (10 = urgence absolue)
+- Priorise paludisme/typhoïde/méningite/choléra en contexte ouest-africain
+- conditions: 2 à 5 entrées ordonnées par probabilité décroissante
+- Réponds en ${params.language === "fr" ? "français" : params.language === "en" ? "anglais" : params.language}
+- Ne prescris JAMAIS de médicaments sur ordonnance
 - Inclure toujours le disclaimer`;
 }
 
-// Supabase Lyra RAG retriever
-const FALLBACK_CONTEXT = [
+// ── Lyra Helpers ──────────────────────────────────────────────────────────
+const LYRA_FALLBACK = [
   "Prendre quelques respirations profondes peut aider à calmer l'anxiété immédiate.",
   "Parler à une personne de confiance est un premier pas important pour la santé mentale.",
   "Le sommeil régulier (7-8h) améliore l'humeur et la résilience au stress.",
@@ -307,92 +330,117 @@ const FALLBACK_CONTEXT = [
   "Des activités simples (marche, musique, prière/méditation) peuvent stabiliser l'humeur.",
 ];
 
-async function retrieveLyraContext(query: string, count = 5): Promise<string> {
-  if (!supabase) return FALLBACK_CONTEXT.slice(0, count).join("\n\n");
+async function getLyraContext(query: string, count = 5): Promise<string> {
+  if (!supabase) return LYRA_FALLBACK.slice(0, count).join("\n\n");
   try {
     const embedding = await embedQuery(query);
     const { data, error } = await supabase.rpc("match_lyra_knowledge", {
       query_embedding: embedding,
-      match_threshold: 0.7,
+      match_threshold: 0.65,
       match_count: count,
     });
-
-    if (error || !data?.length) {
-      return FALLBACK_CONTEXT.slice(0, count).join("\n\n");
-    }
-
-    return (data as any[]).map((c) => c.content).join("\n\n");
-  } catch (err) {
-    console.error("[Backend] Lyra retrieve error:", err);
-    return FALLBACK_CONTEXT.slice(0, count).join("\n\n");
+    if (error || !data?.length) return LYRA_FALLBACK.slice(0, count).join("\n\n");
+    return (data as { content: string }[]).map((c) => c.content).join("\n\n");
+  } catch {
+    return LYRA_FALLBACK.slice(0, count).join("\n\n");
   }
 }
 
-// Lyra Prompt template
-function getLyraSystemPrompt(language: string, retrievedContext: string): string {
-  const isFr = language.toLowerCase() === "fr";
-  if (isFr) {
+function lyraSystemPrompt(language: string, context: string): string {
+  if (language === "fr") {
     return `Tu es Lyra, thérapeute virtuelle de Pulse AI. Tu es chaleureuse, empathique, culturellement sensible au contexte ouest-africain.
-CONTEXTE RÉCUPÉRÉ (RAG) :
-${retrievedContext}
 
-RÈGLES :
+CONTEXTE RAG:
+${context}
+
+RÈGLES:
 - Jamais de diagnostic psychiatrique
 - Valide toujours les émotions avant de donner une perspective
 - Langage simple et humain, pas clinique
-- Si l'utilisateur mentionne idées suicidaires : donne immédiatement : SOS Togo : +228 22 22 22 22 | Nigeria : 0800-SAFELINE
-- Réponds en fr
+- Si l'utilisateur mentionne des idées suicidaires: donne immédiatement SOS Togo: +228 22 22 22 22 | Nigeria: 0800-SAFELINE
+- Réponds en français
 - Réponses < 150 mots sauf si soutien étendu nécessaire
 - Termine toujours par une question douce ou une affirmation`;
-  } else {
-    return `You are Lyra, virtual therapist of Pulse AI. You are warm, empathetic, and culturally sensitive to the West African context.
-RETRIEVED CONTEXT (RAG):
-${retrievedContext}
+  }
+  return `You are Lyra, Pulse AI's virtual therapist. You are warm, empathetic, and culturally sensitive to the West African context.
+
+RETRIEVED CONTEXT:
+${context}
 
 RULES:
 - Never give a psychiatric diagnosis
-- Always validate emotions before giving a perspective
-- Simple and human language, not clinical
-- If the user mentions suicidal thoughts: immediately give: SOS Togo: +228 22 22 22 22 | Nigeria: 0800-SAFELINE
-- Respond in en
-- Responses < 150 words unless extended support is necessary
+- Always validate emotions before offering perspective
+- Simple, human language — not clinical
+- If the user mentions suicidal thoughts: immediately provide SOS Togo: +228 22 22 22 22 | Nigeria: 0800-SAFELINE
+- Respond in English
+- Responses < 150 words unless extended support is needed
 - Always end with a gentle question or affirmation`;
-  }
 }
 
-// -------------------------------------------------------------
-// ENDPOINTS
-// -------------------------------------------------------------
+// ── ROUTES ────────────────────────────────────────────────────────────────
 
-// Live check
-app.get("/health", (req, res) => {
-  res.json({ status: "healthy", timestamp: new Date().toISOString() });
+// Health check
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    services: {
+      supabase: !!supabase,
+      mistral: !!process.env.MISTRAL_API_KEY,
+      groq: !!process.env.GROQ_API_KEY,
+      huggingface: !!process.env.HUGGINGFACE_API_KEY,
+    },
+  });
 });
 
 // POST /api/diagnose
-app.post("/api/diagnose", async (req, res) => {
-  let attempt = 0;
-  const maxAttempts = 2;
-
-  while (attempt < maxAttempts) {
+app.post("/api/diagnose", async (req: Request, res: Response) => {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const { symptoms, language = "fr", country = "togo", age, sex, context } = req.body;
+      const {
+        symptoms,
+        language = "fr",
+        country = "togo",
+        age,
+        sex,
+        context,
+      } = req.body;
 
-      if (!symptoms || symptoms.trim().length < 10) {
-        return res.status(400).json({ error: "Symptom description too short" });
+      if (!symptoms || typeof symptoms !== "string" || symptoms.trim().length < 10) {
+        return res.status(400).json({ error: "Symptom description too short (min 10 chars)" });
       }
 
-      // 1. NLP extract symptoms
+      const mistralKey = process.env.MISTRAL_API_KEY;
+      if (!mistralKey) throw new Error("MISTRAL_API_KEY not configured");
+
+      console.log(`[Diagnose] Attempt ${attempt} — language: ${language}, country: ${country}`);
+
+      // Step 1 — NLP extraction via Groq
+      console.log("[Diagnose] Step 1: Extracting symptoms via Groq…");
       const extraction = await extractSymptoms(symptoms, language);
+      console.log(
+        `[Diagnose] Extracted: ${extraction.symptoms_en.length} symptoms | query: "${extraction.symptoms_query}"`
+      );
 
-      // 2. Vector search
-      const matches = await retrieveDiseases(extraction);
+      // Step 2 — Vector search via Supabase
+      console.log("[Diagnose] Step 2: Vector search in Supabase…");
+      let matches: DiseaseMatch[] = [];
+      let lowConfidence = true;
 
-      // 3. Low confidence check
-      const lowConfidence = matches.length === 0 || matches[0].similarity < 0.30;
+      try {
+        matches = await retrieveDiseases(extraction);
+        lowConfidence = matches.length === 0 || matches[0].similarity < 0.3;
+        console.log(
+          `[Diagnose] Found ${matches.length} matches | top: ${matches[0]?.disease_name} (${(matches[0]?.similarity * 100 || 0).toFixed(1)}%)`
+        );
+      } catch (ragErr) {
+        console.error("[Diagnose] Vector search failed (continuing):", ragErr);
+        lowConfidence = true;
+      }
 
-      // 4. Mistral synthesis
-      const prompt = buildDiagnosisPrompt({
+      // Step 3 — Mistral synthesis (RAG + clinical reasoning)
+      console.log("[Diagnose] Step 3: Mistral synthesis…");
+      const diagPrompt = buildDiagnosisPrompt({
         top5: matches,
         symptoms_text: symptoms,
         duration: extraction.duration,
@@ -404,56 +452,62 @@ app.post("/api/diagnose", async (req, res) => {
         language,
       });
 
-      const apiKey = process.env.MISTRAL_API_KEY;
-      if (!apiKey) throw new Error("MISTRAL_API_KEY is not configured");
-
-      const mistralResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
+      const mistralRes = await fetch("https://api.mistral.ai/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${mistralKey}`,
         },
         body: JSON.stringify({
           model: "mistral-medium-latest",
           messages: [
             { role: "system", content: DIAGNOSIS_SYSTEM_PROMPT },
-            { role: "user", content: prompt },
+            { role: "user", content: diagPrompt },
           ],
           temperature: 0.2,
-          max_tokens: 1500,
+          max_tokens: 1800,
           response_format: { type: "json_object" },
         }),
       });
 
-      if (!mistralResponse.ok) {
-        const errText = await mistralResponse.text();
-        throw new Error(`Mistral API error: ${mistralResponse.status} - ${errText}`);
+      if (!mistralRes.ok) {
+        const errText = await mistralRes.text();
+        throw new Error(`Mistral API ${mistralRes.status}: ${errText.slice(0, 200)}`);
       }
 
-      const data = await mistralResponse.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) throw new Error("Empty completion from Mistral");
+      const mistralData = await mistralRes.json();
+      const content = mistralData.choices?.[0]?.message?.content;
+      if (!content) throw new Error("Empty Mistral response");
 
       const result = JSON.parse(content);
+      console.log(
+        `[Diagnose] ✅ Done — severity: ${result.severity}, conditions: ${result.conditions?.length}`
+      );
 
-      // Return JSON
       return res.json({
         ...result,
         lowConfidence,
-        rawMatches: matches,
+        rawMatches: matches.map((m) => ({
+          disease_name: m.disease_name,
+          similarity: parseFloat((m.similarity * 100).toFixed(1)),
+          percentage: m.percentage,
+        })),
       });
-    } catch (error) {
-      attempt++;
-      console.error(`[Backend] Diagnose attempt ${attempt} failed:`, error);
-      if (attempt >= maxAttempts) {
-        return res.status(503).json({ error: "Medical diagnosis engine is busy. Please try again." });
+    } catch (err) {
+      console.error(`[Diagnose] Attempt ${attempt}/2 failed:`, err);
+      if (attempt >= 2) {
+        return res.status(503).json({
+          error:
+            "Le moteur de diagnostic est temporairement indisponible. Réessayez dans quelques instants.",
+        });
       }
+      await sleep(1500);
     }
   }
 });
 
-// POST /api/lyra (Streaming response)
-app.post("/api/lyra", async (req, res) => {
+// POST /api/lyra (streaming SSE)
+app.post("/api/lyra", async (req: Request, res: Response) => {
   try {
     const { message, conversationHistory, history, language = "fr" } = req.body;
     const activeHistory = conversationHistory || history || [];
@@ -462,145 +516,131 @@ app.post("/api/lyra", async (req, res) => {
       return res.status(400).json({ error: "Message required" });
     }
 
-    // 1. & 2. Retrieve Lyra RAG Context
-    const contextText = await retrieveLyraContext(message);
+    const mistralKey = process.env.MISTRAL_API_KEY;
+    if (!mistralKey) throw new Error("MISTRAL_API_KEY not configured");
 
-    // 3. Build prompts
-    const systemPrompt = getLyraSystemPrompt(language, contextText);
+    // Retrieve RAG context from lyra_knowledge
+    const contextText = await getLyraContext(message);
 
-    const formattedMessages = [
-      { role: "system", content: systemPrompt },
-      ...activeHistory.map((m: any) => ({
+    const messages = [
+      { role: "system", content: lyraSystemPrompt(language, contextText) },
+      ...activeHistory.map((m: { role: string; content: string }) => ({
         role: m.role,
         content: m.content,
       })),
       { role: "user", content: message },
     ];
 
-    const apiKey = process.env.MISTRAL_API_KEY;
-    if (!apiKey) throw new Error("MISTRAL_API_KEY is not configured");
-
-    const mistralResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    const mistralRes = await fetch("https://api.mistral.ai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${mistralKey}`,
       },
       body: JSON.stringify({
         model: "mistral-medium-latest",
-        messages: formattedMessages,
+        messages,
         stream: true,
+        temperature: 0.7,
+        max_tokens: 400,
       }),
     });
 
-    if (!mistralResponse.ok) {
-      const errText = await mistralResponse.text();
-      throw new Error(`Mistral API error: ${mistralResponse.status} - ${errText}`);
+    if (!mistralRes.ok) {
+      const errText = await mistralRes.text();
+      throw new Error(`Mistral API ${mistralRes.status}: ${errText}`);
     }
 
-    const reader = mistralResponse.body;
-    if (!reader) throw new Error("No response body from Mistral");
-
-    // Configure SSE headers
+    // SSE headers
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
 
-    // Send metadata first (retrieved RAG context information)
-    const retrievedChunks = [
-      {
-        id: "context",
-        content: contextText,
-        source: "vector_db",
-        similarity: 1.0,
-      },
-    ];
-    res.write(JSON.stringify({ type: "metadata", retrievedChunks }) + "\n");
+    // Send RAG metadata first
+    res.write(
+      JSON.stringify({
+        type: "metadata",
+        retrievedChunks: [{ id: "ctx", content: contextText, source: "vector_db", similarity: 1.0 }],
+      }) + "\n"
+    );
 
-    // Replicate reader chunk piping for Node.js Readable stream
-    const nodeReader = reader as any;
-    
-    // In Node.js environment, the response body might be a web ReadableStream or a Node stream
-    if (typeof nodeReader.getReader === "function") {
-      const webReader = nodeReader.getReader();
+    // Stream response
+    const nodeStream = mistralRes.body as unknown as NodeJS.ReadableStream & {
+      getReader?: () => ReadableStreamDefaultReader<Uint8Array>;
+    };
+
+    if (typeof (nodeStream as any).getReader === "function") {
+      // Web ReadableStream (Node 18+)
+      const reader = (nodeStream as any).getReader() as ReadableStreamDefaultReader<Uint8Array>;
       const decoder = new TextDecoder();
-      let buffer = "";
-      
-      try {
-        while (true) {
-          const { done, value } = await webReader.read();
-          if (done) break;
-          
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          
-          for (const line of lines) {
-            const cleanLine = line.trim();
-            if (!cleanLine) continue;
-            
-            if (cleanLine.startsWith("data: ")) {
-              const dataStr = cleanLine.substring(6).trim();
-              if (dataStr === "[DONE]") break;
-              
-              try {
-                const parsed = JSON.parse(dataStr);
-                const chunkText = parsed.choices?.[0]?.delta?.content || "";
-                if (chunkText) {
-                  res.write(JSON.stringify({ type: "chunk", text: chunkText }) + "\n");
-                }
-              } catch {
-                // partial JSON parsing error
-              }
-            }
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const clean = line.trim();
+          if (!clean.startsWith("data: ")) continue;
+          const payload = clean.slice(6).trim();
+          if (payload === "[DONE]") break;
+          try {
+            const parsed = JSON.parse(payload);
+            const text = parsed.choices?.[0]?.delta?.content || "";
+            if (text) res.write(JSON.stringify({ type: "chunk", text }) + "\n");
+          } catch {
+            /* partial line */
           }
         }
-      } catch (err) {
-        console.error("[Backend] WebStream read error:", err);
-      } finally {
-        res.end();
       }
+      res.end();
     } else {
       // Node.js stream
-      nodeReader.on("data", (chunk: Buffer) => {
-        const lines = chunk.toString().split("\n");
-        for (const line of lines) {
-          const cleanLine = line.trim();
-          if (!cleanLine) continue;
-          
-          if (cleanLine.startsWith("data: ")) {
-            const dataStr = cleanLine.substring(6).trim();
-            if (dataStr === "[DONE]") {
-              res.end();
-              return;
-            }
-            try {
-              const parsed = JSON.parse(dataStr);
-              const chunkText = parsed.choices?.[0]?.delta?.content || "";
-              if (chunkText) {
-                res.write(JSON.stringify({ type: "chunk", text: chunkText }) + "\n");
-              }
-            } catch {
-              // ignore partial line parse errors
-            }
-          }
+      nodeStream.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n")) {
+          const clean = line.trim();
+          if (!clean.startsWith("data: ")) continue;
+          const payload = clean.slice(6).trim();
+          if (payload === "[DONE]") { res.end(); return; }
+          try {
+            const parsed = JSON.parse(payload);
+            const text = parsed.choices?.[0]?.delta?.content || "";
+            if (text) res.write(JSON.stringify({ type: "chunk", text }) + "\n");
+          } catch { /* partial */ }
         }
       });
-      nodeReader.on("end", () => {
-        res.end();
-      });
-      nodeReader.on("error", (err: any) => {
-        console.error("[Backend] Node stream error:", err);
-        res.end();
-      });
+      nodeStream.on("end", () => res.end());
+      nodeStream.on("error", () => res.end());
     }
-  } catch (error) {
-    console.error("[Backend] Lyra streaming error:", error);
-    res.status(503).json({ error: "Lyra is currently resting. Please try again." });
+  } catch (err) {
+    console.error("[Lyra] Error:", err);
+    if (!res.headersSent) {
+      res.status(503).json({ error: "Lyra is temporarily unavailable." });
+    } else {
+      res.end();
+    }
   }
 });
 
-// Start listening
-app.listen(PORT, () => {
-  console.log(`🚀 Standalone Render Backend listening on port ${PORT}`);
+// 404 catch-all
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ error: "Endpoint not found" });
 });
+
+// Error middleware
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("[Server Error]", err.message);
+  res.status(500).json({ error: err.message });
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`\n🚀  PulseAI Backend listening on port ${PORT}`);
+  console.log(`   ENV: MISTRAL=${!!process.env.MISTRAL_API_KEY} | GROQ=${!!process.env.GROQ_API_KEY} | HF=${!!process.env.HUGGINGFACE_API_KEY} | Supabase=${!!supabase}`);
+});
+
+export default app;
