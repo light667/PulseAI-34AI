@@ -17,93 +17,62 @@ const GEO_BOOST: Record<string, number> = {
   "lassa fever": 1.2, "hepatitis": 1.2, "pneumonia": 1.2,
 };
 
-// ── HuggingFace API directement — pas de modèle local ───────────────────────
-async function embedHF(text: string): Promise<number[]> {
-  const HF_KEY = process.env.HUGGINGFACE_API_KEY!;
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${HF_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            inputs: text.slice(0, 400),
-            options: { wait_for_model: true },
-          }),
-        }
-      );
-
-      if (res.status === 503) {
-        console.log("   ⏳ HF model loading, waiting 15s...");
-        await sleep(15000);
-        continue;
+// HF API — un seul appel à la fois, libère immédiatement
+async function embedOne(text: string): Promise<number[] | null> {
+  const key = process.env.HUGGINGFACE_API_KEY!;
+  try {
+    const res = await fetch(
+      "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ inputs: text.slice(0, 300), options: { wait_for_model: true } }),
       }
-      if (res.status === 429) {
-        console.log("   ⏳ HF rate limit, waiting 30s...");
-        await sleep(30000);
-        continue;
-      }
-      if (!res.ok) throw new Error(`HF ${res.status}: ${await res.text()}`);
-
-      const raw = await res.json() as number[] | number[][];
-      return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
-
-    } catch (err) {
-      if (attempt === 3) throw err;
-      await sleep(2000 * (attempt + 1));
-    }
+    );
+    if (res.status === 503) { await sleep(15000); return null; }
+    if (res.status === 429) { await sleep(35000); return null; }
+    if (!res.ok) return null;
+    const raw = await res.json() as number[] | number[][];
+    return Array.isArray(raw[0]) ? (raw[0] as number[]) : (raw as number[]);
+  } catch {
+    return null;
   }
-  throw new Error("Embed failed after 4 attempts");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
 }
 
 function parseCSV(content: string): Record<string, string>[] {
   const lines = content.trim().split("\n");
-  const headers = lines[0]
-    .split(",")
-    .map(h => h.trim().replace(/"/g, "").replace(/\r/g, ""));
+  const headers = lines[0].split(",").map(h => h.trim().replace(/"/g, "").replace(/\r/g, ""));
   return lines.slice(1).map(line => {
-    const values = line.split(",")
-      .map(v => v.trim().replace(/"/g, "").replace(/\r/g, ""));
+    const values = line.split(",").map(v => v.trim().replace(/"/g, "").replace(/\r/g, ""));
     const row: Record<string, string> = {};
     headers.forEach((h, i) => { row[h] = values[i] || "0"; });
     return row;
   });
 }
 
-function findCSV(): string | null {
-  const cwd = process.cwd();
-  const candidates = [
-    // Chemin exact confirmé par debug Render
-    "/opt/render/project/src/public/data/data_symptom.csv",
-    path.join(cwd, "..", "public", "data", "data_symptom.csv"),
-    path.join(cwd, "..", "data_symptom.csv"),
-    path.join(cwd, "data_symptom.csv"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) {
-      console.log(`✅ CSV found: ${p}`);
-      return p;
-    }
-  }
-  console.error("❌ CSV not found. Searched:", candidates);
-  return null;
-}
+// État global de progression (pour /ingest/progress)
+let ingestState = {
+  running: false,
+  total: 0,
+  done: 0,
+  errors: 0,
+  lastDisease: "",
+};
 
-// ── POST /ingest ─────────────────────────────────────────────────────────────
 router.post("/", async (req: Request, res: Response) => {
   const secret = req.headers["x-ingest-secret"];
   const validSecret = process.env.INGEST_SECRET;
   if (validSecret && secret !== validSecret) {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  if (ingestState.running) {
+    return res.json({
+      message: "Ingestion already running",
+      progress: `${ingestState.done}/${ingestState.total}`,
+    });
   }
 
   try {
@@ -112,91 +81,98 @@ router.post("/", async (req: Request, res: Response) => {
       .select("*", { count: "exact", head: true });
 
     if (count && count > 0) {
-      return res.json({
-        message: `Already ingested (${count} diseases)`,
-        skipped: true,
-        count,
-      });
+      return res.json({ message: `Already done (${count})`, skipped: true });
     }
 
-    const csvPath = findCSV();
-    if (!csvPath) {
-      return res.status(404).json({
-        error: "data_symptom.csv not found",
-        cwd: process.cwd(),
-      });
+    // Trouver le CSV
+    const csvPath = "/opt/render/project/src/public/data/data_symptom.csv";
+    if (!fs.existsSync(csvPath)) {
+      return res.status(404).json({ error: "CSV not found", path: csvPath });
     }
 
     const rows = parseCSV(fs.readFileSync(csvPath, "utf-8"));
 
-    const diseaseMap = new Map<string, Set<string>>();
+    // Dédoublonner
+    const diseaseMap = new Map<string, string[]>();
     for (const row of rows) {
       const disease = row["diseases"]?.trim();
       if (!disease) continue;
-      if (!diseaseMap.has(disease)) diseaseMap.set(disease, new Set());
+      if (!diseaseMap.has(disease)) diseaseMap.set(disease, []);
       Object.entries(row).forEach(([key, val]) => {
         if (key !== "diseases" && val === "1") {
-          diseaseMap.get(disease)!.add(key.replace(/_/g, " "));
+          diseaseMap.get(disease)!.push(key.replace(/_/g, " "));
         }
       });
     }
 
-    const diseases = Array.from(diseaseMap.entries());
-    console.log(`🔬 ${diseases.length} diseases to ingest via HuggingFace API`);
+    // Dédupliquer les symptômes
+    const diseases: [string, string[]][] = Array.from(diseaseMap.entries())
+      .map(([d, s]) => [d, [...new Set(s)]]);
+
+    ingestState = { running: true, total: diseases.length, done: 0, errors: 0, lastDisease: "" };
 
     // Répondre immédiatement
-    res.json({
-      message: "Ingestion started",
-      total: diseases.length,
-      note: "Check /ingest/status for progress",
-    });
+    res.json({ message: "Ingestion started", total: diseases.length });
 
-    // Ingestion async
-    (async () => {
-      let success = 0;
-      let errors  = 0;
+    // Traitement séquentiel strict — un par un
+    ;(async () => {
+      for (const [disease, symptoms] of diseases) {
+        // Texte court pour économiser mémoire
+        const symptomsText = symptoms.slice(0, 20).join(", ");
+        const geoBoost = GEO_BOOST[disease.toLowerCase()] || 1.0;
 
-      for (const [disease, symptomsSet] of diseases) {
-        try {
-          const symptomsText = Array.from(symptomsSet).join(", ");
-          const geoBoost = GEO_BOOST[disease.toLowerCase()] || 1.0;
-
-          const embedding = await embedHF(symptomsText);
-
-          const { error } = await supabase.from("disease_embeddings").insert({
-            disease_name:  disease,
-            symptoms_text: symptomsText,
-            rich_text:     `Patient with ${disease}: ${symptomsText}. West Africa.`,
-            symptom_list:  Array.from(symptomsSet),
-            geo_boost:     geoBoost,
-            embedding,
-          });
-
-          if (error) throw new Error(error.message);
-          success++;
-          console.log(`  ✓ [${success}/${diseases.length}] ${disease}`);
-
-          // 1.1s entre chaque appel HF
-          await sleep(1100);
-
-        } catch (err: any) {
-          errors++;
-          console.error(`  ✗ ${disease}: ${err.message}`);
+        // Retry si null (503 ou rate limit)
+        let embedding: number[] | null = null;
+        for (let retry = 0; retry < 3 && !embedding; retry++) {
+          embedding = await embedOne(symptomsText);
+          if (!embedding) await sleep(5000);
         }
+
+        if (!embedding) {
+          ingestState.errors++;
+          console.error(`  ✗ ${disease}: embedding failed`);
+          continue;
+        }
+
+        const { error } = await supabase.from("disease_embeddings").insert({
+          disease_name:  disease,
+          symptoms_text: symptomsText,
+          rich_text:     `${disease}: ${symptomsText}`,
+          symptom_list:  symptoms,
+          geo_boost:     geoBoost,
+          embedding,
+        });
+
+        if (error) {
+          ingestState.errors++;
+          console.error(`  ✗ ${disease}: ${error.message}`);
+        } else {
+          ingestState.done++;
+          ingestState.lastDisease = disease;
+          console.log(`  ✓ [${ingestState.done}/${diseases.length}] ${disease}`);
+        }
+
+        // Libérer la mémoire + respecter rate limit HF
+        embedding = null;
+        await sleep(1200);
       }
 
-      console.log(`\n✅ Ingestion done: ${success} ok, ${errors} errors`);
+      ingestState.running = false;
+      console.log(`\n✅ Ingestion done: ${ingestState.done} ok, ${ingestState.errors} errors`);
     })();
 
   } catch (err: any) {
+    ingestState.running = false;
     console.error("Ingest error:", err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
-    }
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /ingest/status ────────────────────────────────────────────────────────
+// Progression en temps réel
+router.get("/progress", (_req: Request, res: Response) => {
+  res.json(ingestState);
+});
+
 router.get("/status", async (_req: Request, res: Response) => {
   const { count, error } = await supabase
     .from("disease_embeddings")
