@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Search, MapPin, Filter, Loader2, AlertCircle, Navigation } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,7 @@ export default function HospitalsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [activeServices, setActiveServices] = useState<string[]>([]);
-  const [searchTimeout, setSearchTimeout] = useState<NodeJS.Timeout | null>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Demande la position GPS à l'utilisateur
   const requestLocation = useCallback(() => {
@@ -116,23 +116,29 @@ export default function HospitalsPage() {
     if (location.status === "granted") {
       fetchHospitals(location.lat, location.lon, query, activeServices);
     }
-  }, [location]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]); // intentionnel : on veut déclencher uniquement sur changement de position
 
   // Debounce sur la recherche textuelle et les filtres
+  // Debounce sur la recherche textuelle et les filtres
   useEffect(() => {
-    if (location.status !== "granted") return;
-    if (searchTimeout) clearTimeout(searchTimeout);
-    const t = setTimeout(() => {
+    if (location.status !== "granted") return; // Ici, TypeScript comprend que location a désormais .lat et .lon
+    
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    
+    searchTimeoutRef.current = setTimeout(() => {
       fetchHospitals(location.lat, location.lon, query, activeServices);
     }, 400);
-    setSearchTimeout(t);
-    return () => clearTimeout(t);
-  }, [query, activeServices]);
-
+    
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  // CORRECTION : On passe "location" entier au lieu de "location.lat" et "location.lon"
+  }, [query, activeServices, location, fetchHospitals]);
   // Demande automatique de position au chargement
   useEffect(() => {
     requestLocation();
-  }, []);
+  }, [requestLocation]);
 
   const toggleService = (s: string) => {
     setActiveServices((prev) =>
@@ -155,7 +161,7 @@ export default function HospitalsPage() {
           </h1>
           <p className="text-[var(--text-secondary)] text-sm">
             PulseAI utilise votre position GPS pour calculer les distances réelles routières
-            jusqu'aux hôpitaux et les classer du plus proche au plus loin.
+            {"jusqu'aux hôpitaux et les classer du plus proche au plus loin."}
           </p>
         </div>
 
