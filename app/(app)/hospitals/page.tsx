@@ -61,29 +61,41 @@ export default function HospitalsPage() {
   const [activeCountry,  setActiveCountry]  = useState("all");
   const searchRef = useRef<NodeJS.Timeout | null>(null);
 
-  const requestLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      setLocation({ status: "denied", reason: "Géolocalisation non supportée." });
-      return;
-    }
-    setLocation({ status: "requesting" });
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setLocation({
+  // Remplacer requestLocation par cette version robuste :
+
+const requestLocation = useCallback(() => {
+  if (!navigator.geolocation) {
+    // Pas de géolocalisation → fallback manuel immédiat
+    setLocation({ status: "denied", reason: "no_geolocation" });
+    return;
+  }
+
+  setLocation({ status: "requesting" });
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      setLocation({
         status: "granted",
         lat: pos.coords.latitude,
         lon: pos.coords.longitude,
-      }),
-      (err) => {
-        const reason =
-          err.code === err.TIMEOUT            ? "Délai dépassé. Réessayez." :
-          err.code === err.POSITION_UNAVAILABLE ? "Position indisponible." :
-          "Accès à la localisation refusé.";
-        setLocation({ status: "denied", reason });
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 300000 }
-    );
+      });
+    },
+    (err) => {
+      setLocation({
+        status: "denied",
+        reason: err.code === err.PERMISSION_DENIED    ? "permission_denied"    :
+                err.code === err.TIMEOUT              ? "timeout"              :
+                err.code === err.POSITION_UNAVAILABLE ? "position_unavailable" :
+                "unknown",
+      });
+    },
+    {
+      enableHighAccuracy: false, // false = plus compatible mobile
+      timeout: 10000,
+      maximumAge: 600000,        // 10 min cache
+    }
+  );
   }, []);
-
   const fetchHospitals = useCallback(
     async (lat: number, lon: number, q: string, services: string[], country: string) => {
       setLoading(true);
@@ -174,24 +186,74 @@ export default function HospitalsPage() {
     );
   }
 
+  // Type mis à jour
+type LocationState =
+  | { status: "idle" }
+  | { status: "requesting" }
+  | { status: "granted"; lat: number; lon: number }
+  | { status: "denied"; reason: string };
+
+// Coordonnées des capitales pour le fallback manuel
+const COUNTRY_DEFAULTS: Record<string, { lat: number; lon: number; label: string }> = {
+  togo:         { lat: 6.1375,  lon: 1.2123,  label: "Lomé, Togo" },
+  benin:        { lat: 6.3654,  lon: 2.4183,  label: "Cotonou, Bénin" },
+  ghana:        { lat: 5.6037,  lon: -0.1870, label: "Accra, Ghana" },
+  cote_divoire: { lat: 5.3600,  lon: -4.0083, label: "Abidjan, Côte d'Ivoire" },
+  nigeria:      { lat: 6.5244,  lon: 3.3792,  label: "Lagos, Nigeria" },
+  burkina_faso: { lat: 12.3647, lon: -1.5332, label: "Ouagadougou, Burkina Faso" },
+  niger:        { lat: 13.5137, lon: 2.1098,  label: "Niamey, Niger" },
+  mali:         { lat: 12.6392, lon: -8.0029, label: "Bamako, Mali" },
+ };
   // ── Error screen ───────────────────────────────────────────────────────────
   if (location.status === "denied") {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4">
-        <div className="text-center space-y-3 max-w-md">
-          <AlertCircle className="h-12 w-12 text-red-500 mx-auto" />
-          <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
-            Localisation non disponible
-          </h2>
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            {location.reason}
-          </p>
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4">
+      <div className="text-center space-y-3 max-w-md">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-50">
+          <MapPin className="h-8 w-8 text-orange-500" />
         </div>
-        <Button variant="secondary" onClick={requestLocation} className="gap-2">
-          <Navigation className="h-4 w-4" /> Réessayer
-        </Button>
+        <h2 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          Localisation non disponible
+        </h2>
+        <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+          {location.reason === "permission_denied"
+            ? "Accès refusé. Choisissez votre pays pour voir les hôpitaux proches."
+            : location.reason === "timeout"
+            ? "GPS lent. Choisissez votre pays pour continuer."
+            : "GPS indisponible. Choisissez votre pays."}
+        </p>
       </div>
-    );
+
+      {/* Sélection manuelle du pays */}
+      <div className="grid grid-cols-2 gap-3 w-full max-w-sm">
+        {Object.entries(COUNTRY_DEFAULTS).map(([key, val]) => {
+          const cf = COUNTRY_FILTERS.find(c => c.key === key);
+          return (
+            <button
+              key={key}
+              onClick={() => {
+                setActiveCountry(key);
+                setLocation({ status: "granted", lat: val.lat, lon: val.lon });
+              }}
+              className="flex items-center gap-2 rounded-xl p-3 text-sm font-medium transition-all"
+              style={{
+                background:  "var(--bg-secondary)",
+                border:      "1px solid var(--border-default)",
+                color:       "var(--text-primary)",
+              }}
+            >
+              <span className="text-lg">{cf?.flag}</span>
+              <span>{cf?.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <Button variant="secondary" onClick={requestLocation} className="gap-2">
+        <Navigation className="h-4 w-4" /> Réessayer GPS
+      </Button>
+    </div>
+  );
   }
 
   // ── Main view ──────────────────────────────────────────────────────────────
