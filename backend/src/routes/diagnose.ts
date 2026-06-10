@@ -5,43 +5,64 @@ import { matchDiseases, type MatchResult } from "../lib/csvMatcher";
 const router = Router();
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY! });
 
-// ── Extraction symptômes via Groq ────────────────────────────────────────────
+// ── Extraction symptômes — ultra-rapide ──────────────────────────────────────
 
 async function extractSymptoms(text: string): Promise<string[]> {
   try {
     const completion = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      temperature: 0.1,
-      max_tokens: 300,
+      temperature: 0.0,
+      max_tokens: 150,          // Réduit de 300 → 150
       messages: [
         {
           role: "system",
-          content: `Extract symptoms from patient description. Return ONLY a JSON array of English medical terms. No other text.`,
+          content: `Extract symptoms. Return ONLY a JSON array of English terms. Example: ["fever","headache"]`,
         },
         {
           role: "user",
-          content: `"${text.slice(0, 500)}"
-
-Return JSON array like: ["fever", "headache", "fatigue"]
-Use standard terms: fever, headache, fatigue, nausea, vomiting, diarrhea, cough, shortness of breath, chest pain, abdominal pain, back pain, joint pain, skin rash, dizziness, loss of appetite, chills, sweating, muscle pain, sore throat, jaundice, swollen lymph nodes, confusion`,
+          content: text.slice(0, 300), // Réduit de 500 → 300
         },
       ],
     });
 
     const content = completion.choices[0].message.content || "[]";
-    const clean = content.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
-    return Array.isArray(parsed) ? parsed : [text];
+    const match = content.match(/\[.*?\]/s);
+    if (!match) return fallbackExtract(text);
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed) ? parsed : fallbackExtract(text);
   } catch {
-    // Fallback : extraire mots-clés simples
-    const keywords = ["fever", "headache", "fatigue", "nausea", "vomiting",
-      "diarrhea", "cough", "chest pain", "abdominal pain", "dizziness",
-      "chills", "sweating", "rash", "jaundice", "weakness"];
-    return keywords.filter(k => text.toLowerCase().includes(k));
+    return fallbackExtract(text);
   }
 }
 
-// ── Synthèse Mistral ─────────────────────────────────────────────────────────
+function fallbackExtract(text: string): string[] {
+  const keywords = [
+    "fever", "headache", "fatigue", "nausea", "vomiting", "diarrhea",
+    "cough", "chest pain", "abdominal pain", "dizziness", "chills",
+    "sweating", "rash", "jaundice", "weakness", "joint pain", "back pain",
+    "sore throat", "shortness of breath", "confusion", "weight loss",
+    // Termes français → mapping
+    "fievre", "fièvre", "maux de tete", "tête", "fatigue", "nausee",
+    "nausée", "toux", "diarrhee", "diarrhée", "vomissement",
+  ];
+  const lower = text.toLowerCase();
+  const found: string[] = [];
+  if (lower.includes("fiev") || lower.includes("fever")) found.push("fever");
+  if (lower.includes("tete") || lower.includes("head")) found.push("headache");
+  if (lower.includes("fatigue") || lower.includes("tired")) found.push("fatigue");
+  if (lower.includes("naus")) found.push("nausea");
+  if (lower.includes("vomit") || lower.includes("vomiss")) found.push("vomiting");
+  if (lower.includes("diarr")) found.push("diarrhea");
+  if (lower.includes("toux") || lower.includes("cough")) found.push("cough");
+  if (lower.includes("douleur") || lower.includes("pain")) found.push("pain");
+  if (lower.includes("friss") || lower.includes("chill")) found.push("chills");
+  if (lower.includes("sueur") || lower.includes("sweat")) found.push("sweating");
+  if (lower.includes("vertige") || lower.includes("dizz")) found.push("dizziness");
+  if (lower.includes("jaun") || lower.includes("ictere")) found.push("jaundice");
+  return found.length > 0 ? found : ["fever", "fatigue"];
+}
+
+// ── Synthèse Mistral — rapide ────────────────────────────────────────────────
 
 interface MistralResponse {
   choices: Array<{ message: { content: string } }>;
@@ -56,10 +77,11 @@ async function synthesize(params: {
   language: string;
 }): Promise<any> {
   const { top5, symptoms, age, sex, country, language } = params;
+  const isFr = language === "fr";
 
   const top5Text = top5
-    .map((d, i) => `${i + 1}. ${d.disease_name} (${d.percentage}%)`)
-    .join("\n");
+    .map((d, i) => `${i + 1}. ${d.disease_name} ${d.percentage}%`)
+    .join(", ");
 
   const res = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
@@ -68,43 +90,32 @@ async function synthesize(params: {
       Authorization: `Bearer ${process.env.MISTRAL_API_KEY!}`,
     },
     body: JSON.stringify({
-      model: "mistral-medium-latest",
-      temperature: 0.2,
-      max_tokens: 1200,
+      model: "mistral-small-latest",   // small = 3x plus rapide que medium
+      temperature: 0.1,
+      max_tokens: 800,                  // Réduit de 1200 → 800
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
-          content: `Tu es RuralDiag, moteur de diagnostic médical pour l'Afrique de l'Ouest. Réponds UNIQUEMENT en JSON valide.`,
+          content: `Medical diagnosis AI for West Africa. Respond ONLY in valid JSON. Language: ${isFr ? "French" : "English"}.`,
         },
         {
           role: "user",
-          content: `TOP 5 MALADIES CANDIDATES :
-${top5Text}
+          content: `Candidates: ${top5Text}
+Patient: "${symptoms.slice(0, 200)}" | Age:${age||"?"} Sex:${sex||"?"} Country:${country||"West Africa"}
 
-PATIENT : "${symptoms}"
-Âge: ${age || "?"} | Sexe: ${sex || "?"} | Pays: ${country || "Afrique de l'Ouest"}
-
-Retourne ce JSON exact :
-{
-  "conditions": [
-    {"name": "string", "probability": number, "description": "string", "recommendation": "string"}
-  ],
-  "severity": "LOW|MEDIUM|HIGH|CRITICAL",
-  "severityScore": number,
-  "severityMessage": "string",
-  "firstAid": ["string", "string", "string"],
-  "doNots": ["string"],
-  "disclaimer": "Ce diagnostic IA est indicatif. Consultez toujours un professionnel de santé."
-}
-
-Règles: CRITICAL si fièvre sévère/douleur thoracique/confusion. HIGH si >3 jours. Réponds en ${language === "fr" ? "français" : "english"}.`,
+JSON:
+{"conditions":[{"name":"str","probability":int,"description":"str","recommendation":"str"}],"severity":"LOW|MEDIUM|HIGH|CRITICAL","severityScore":int,"severityMessage":"str","firstAid":["str","str","str"],"doNots":["str"],"disclaimer":"Diagnostic IA indicatif. Consultez un médecin."}`,
         },
       ],
     }),
   });
 
-  if (!res.ok) throw new Error(`Mistral ${res.status}`);
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Mistral ${res.status}: ${errText.slice(0, 100)}`);
+  }
+
   const data = await res.json() as MistralResponse;
   return JSON.parse(data.choices[0].message.content);
 }
@@ -115,43 +126,63 @@ router.post("/", async (req: Request, res: Response) => {
   const start = Date.now();
   const { symptoms, language = "fr", country = "togo", age, sex } = req.body;
 
-  if (!symptoms || symptoms.trim().length < 10) {
+  if (!symptoms || symptoms.trim().length < 5) {
     return res.status(400).json({
-      error: "Veuillez décrire vos symptômes (minimum 10 caractères)",
+      error: isFr(language)
+        ? "Décrivez vos symptômes"
+        : "Please describe your symptoms",
     });
   }
 
   try {
-    // Étape 1 — Extraction symptômes (Groq)
-    const extracted = await extractSymptoms(symptoms);
-    console.log(`🔍 Extracted: ${extracted.join(", ")}`);
+    // Étape 1 + 2 en parallèle — Groq extraction ET matching CSV simultanés
+    const [extracted, quickMatch] = await Promise.all([
+      extractSymptoms(symptoms),
+      Promise.resolve(matchDiseases(fallbackExtract(symptoms), 5)),
+    ]);
 
-    // Étape 2 — Matching CSV en mémoire (instantané, zéro réseau)
+    // Re-matcher avec les symptômes extraits par Groq
     const top5 = matchDiseases(extracted, 5);
-    console.log(`📊 Top match: ${top5[0]?.disease_name} (${top5[0]?.percentage}%)`);
+    // Prendre le meilleur des deux matchings
+    const finalTop5 = top5[0]?.final_score > (quickMatch[0]?.final_score || 0)
+      ? top5
+      : quickMatch;
 
-    if (top5.length === 0) {
-      return res.status(404).json({ error: "Aucune maladie correspondante." });
-    }
+    console.log(`🔍 ${extracted.join(",")} → ${finalTop5[0]?.disease_name} (${finalTop5[0]?.percentage}%)`);
 
-    // Étape 3 — Synthèse Mistral
-    const result = await synthesize({ top5, symptoms, age, sex, country, language });
+    // Étape 3 — Mistral synthèse
+    const result = await synthesize({
+      top5: finalTop5,
+      symptoms,
+      age,
+      sex,
+      country,
+      language,
+    });
 
-    console.log(`✅ Diagnose in ${Date.now() - start}ms`);
+    const elapsed = Date.now() - start;
+    console.log(`✅ ${elapsed}ms`);
+
     return res.json({
       ...result,
       meta: {
-        elapsed_ms: Date.now() - start,
-        top_match: top5[0]?.disease_name,
-        confidence: top5[0]?.percentage,
+        elapsed_ms: elapsed,
+        top_match: finalTop5[0]?.disease_name,
+        confidence: finalTop5[0]?.percentage,
         extracted_symptoms: extracted,
       },
     });
 
   } catch (err: any) {
     console.error("Diagnose error:", err.message);
-    return res.status(500).json({ error: "Erreur d'analyse. Réessayez." });
+    return res.status(500).json({
+      error: isFr(language)
+        ? "Erreur d'analyse. Réessayez dans quelques secondes."
+        : "Analysis error. Please retry.",
+    });
   }
 });
+
+function isFr(lang: string) { return lang === "fr"; }
 
 export default router;
